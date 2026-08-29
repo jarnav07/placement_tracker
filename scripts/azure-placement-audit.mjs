@@ -1,217 +1,204 @@
-// Azure-only placement verification.
-// This intentionally bypasses all deterministic verification and asks Azure OpenAI
-// to independently research the current state of each tracked 2027 student role.
-// The script is non-destructive: user application-tracking fields are preserved.
+// Azure-only placement verification and full-record enrichment.
+// No deterministic verification is used here. Every tracked placement is independently
+// researched by Azure OpenAI and every non-user-managed field is refreshed when evidence exists.
 
 import { createClient } from '@supabase/supabase-js'
 
-const rawSupabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim().replace(/^['\"]|['\"]$/g, '')
+const supabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '').trim().replace(/^['\"]|['\"]$/g, '').replace(/\/$/, '')
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^['\"]|['\"]$/g, '')
 const azureApiKey = process.env.AZURE_OPENAI_API_KEY?.trim().replace(/^['\"]|['\"]$/g, '')
 const azureEndpoint = (process.env.AZURE_OPENAI_ENDPOINT || '').trim().replace(/^['\"]|['\"]$/g, '').replace(/\/+$/, '')
 const azureDeployment = (process.env.AZURE_OPENAI_DEPLOYMENT_NAME || '').trim().replace(/^['\"]|['\"]$/g, '')
 
-if (!rawSupabaseUrl || !supabaseKey) throw new Error('Missing Supabase URL/service role key.')
+if (!supabaseUrl || !supabaseKey) throw new Error('Missing Supabase URL/service role key.')
 if (!azureApiKey || !azureEndpoint || !azureDeployment) {
   throw new Error('Missing AZURE_OPENAI_API_KEY / AZURE_OPENAI_ENDPOINT / AZURE_OPENAI_DEPLOYMENT_NAME.')
 }
 
-const supabase = createClient(rawSupabaseUrl.replace(/\/$/, ''), supabaseKey, {
+const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: { persistSession: false, autoRefreshToken: false },
   realtime: { enabled: false }
 })
 
 const TODAY = new Date().toISOString().slice(0, 10)
-const TARGET_INTAKE = '2027'
+const TARGET_YEAR = 2027
 const MAX_WEB_SEARCHES = 10
 const MAX_CONCURRENT = 2
 const REQUEST_TIMEOUT_MS = 180000
-const MIN_OPEN_CONFIDENCE = 0.80
-const MIN_CLOSED_CONFIDENCE = 0.85
 
-const states = ['OPEN_NOW', 'OPENING_SOON', 'EXPECTED', 'NOT_YET_PUBLISHED', 'CLOSED', 'UNKNOWN']
+const STATES = ['Open Now', 'Opening Soon', 'Expected', 'Not Yet Published', 'Closed', 'Unknown']
+const PRIORITY_FIELDS = [
+  'cv_fit', 'aerospace_relevance', 'rocket_space_relevance', 'f1_motorsport_relevance',
+  'aero_cfd_relevance', 'propulsion_relevance', 'controls_avionics_relevance',
+  'prestige', 'career_value'
+]
+
+const USER_MANAGED = new Set([
+  'id', 'created_at', 'updated_at', 'app_status', 'date_applied', 'cv_version',
+  'cover_letter_required', 'referral_contact', 'interview_date', 'outcome', 'notes', 'not_interested'
+])
+
+const FIELD_TYPES = {
+  cv_fit: 'integer', aerospace_relevance: 'integer', rocket_space_relevance: 'integer',
+  f1_motorsport_relevance: 'integer', aero_cfd_relevance: 'integer', propulsion_relevance: 'integer',
+  controls_avionics_relevance: 'integer', prestige: 'integer', career_value: 'integer', start_year: 'integer'
+}
 
 const schema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    status: { type: 'string', enum: states },
-    confidence: { type: 'number', minimum: 0, maximum: 1 },
-    intake_year: { type: 'string' },
-    intake_year_confirmed: { type: 'boolean' },
-    exact_student_program_found: { type: 'boolean' },
-    exact_role_found: { type: 'boolean' },
-    direct_application_for_exact_role_found: { type: 'boolean' },
-    official_program_source_found: { type: 'boolean' },
-    opening_date: { type: 'string' },
-    opening_timing: { type: 'string' },
-    deadline: { type: 'string' },
-    deadline_type: { type: 'string' },
-    verified_application_url: { type: 'string' },
-    location_city: { type: 'string' },
-    location_country: { type: 'string' },
-    salary: { type: 'string' },
-    degree_requirements: { type: 'string' },
-    placement_duration: { type: 'string' },
-    placement_type: { type: 'string' },
-    website: { type: 'string' },
-    evidence_summary: { type: 'string' },
-    sources: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          url: { type: 'string' },
-          type: { type: 'string' },
-          evidence: { type: 'string' }
-        },
-        required: ['url', 'type', 'evidence']
-      }
+    company: { type: 'string' }, sector: { type: 'string' }, country: { type: 'string' }, city: { type: 'string' },
+    website: { type: 'string' }, careers_page: { type: 'string' }, specific_role: { type: 'string' },
+    department: { type: 'string' }, engineering_area: { type: 'string' }, placement_type: { type: 'string' },
+    placement_duration: { type: 'string' }, placement_start_date: { type: 'string' }, placement_end_date: { type: 'string' },
+    application_status: { type: 'string', enum: STATES }, exact_opening_date: { type: 'string' }, exact_deadline: { type: 'string' },
+    deadline_type: { type: 'string' }, date_info_verified: { type: 'string' }, application_link: { type: 'string' },
+    degree_requirements: { type: 'string' }, min_grade_requirement: { type: 'string' }, year_of_study_requirement: { type: 'string' },
+    required_technical_skills: { type: 'string' }, citizenship_requirement: { type: 'string' },
+    right_to_work_requirement: { type: 'string' }, security_clearance_requirement: { type: 'string' }, visa_requirement: { type: 'string' },
+    salary: { type: 'string' }, salary_period: { type: 'string' }, other_benefits: { type: 'string' },
+    cv_fit: { type: 'integer', minimum: 0, maximum: 10 }, aerospace_relevance: { type: 'integer', minimum: 0, maximum: 10 },
+    rocket_space_relevance: { type: 'integer', minimum: 0, maximum: 10 }, f1_motorsport_relevance: { type: 'integer', minimum: 0, maximum: 10 },
+    aero_cfd_relevance: { type: 'integer', minimum: 0, maximum: 10 }, propulsion_relevance: { type: 'integer', minimum: 0, maximum: 10 },
+    controls_avionics_relevance: { type: 'integer', minimum: 0, maximum: 10 }, prestige: { type: 'integer', minimum: 0, maximum: 10 },
+    career_value: { type: 'integer', minimum: 0, maximum: 10 }, overall_priority: { type: 'string' },
+    why_it_fits: { type: 'string' }, potential_weaknesses: { type: 'string' }, source_url: { type: 'string' },
+    source_type: { type: 'string' }, source_date_checked: { type: 'string' }, source_verified: { type: 'string' },
+    start_year: { type: 'integer' }, confidence: { type: 'number', minimum: 0, maximum: 1 },
+    evidence_summary: { type: 'string' }, sources: {
+      type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+        url: { type: 'string' }, type: { type: 'string' }, evidence: { type: 'string' }
+      }, required: ['url', 'type', 'evidence'] }
     }
   },
   required: [
-    'status', 'confidence', 'intake_year', 'intake_year_confirmed',
-    'exact_student_program_found', 'exact_role_found',
-    'direct_application_for_exact_role_found', 'official_program_source_found',
-    'opening_date', 'opening_timing', 'deadline', 'deadline_type',
-    'verified_application_url', 'location_city', 'location_country', 'salary',
-    'degree_requirements', 'placement_duration', 'placement_type', 'website',
-    'evidence_summary', 'sources'
+    'company','sector','country','city','website','careers_page','specific_role','department','engineering_area','placement_type',
+    'placement_duration','placement_start_date','placement_end_date','application_status','exact_opening_date','exact_deadline',
+    'deadline_type','date_info_verified','application_link','degree_requirements','min_grade_requirement','year_of_study_requirement',
+    'required_technical_skills','citizenship_requirement','right_to_work_requirement','security_clearance_requirement','visa_requirement',
+    'salary','salary_period','other_benefits','cv_fit','aerospace_relevance','rocket_space_relevance','f1_motorsport_relevance',
+    'aero_cfd_relevance','propulsion_relevance','controls_avionics_relevance','prestige','career_value','overall_priority','why_it_fits',
+    'potential_weaknesses','source_url','source_type','source_date_checked','source_verified','start_year','confidence','evidence_summary','sources'
   ]
 }
 
 const instructions = [
-  'You are the primary verification agent for a 2027 student placement tracker.',
-  'Ignore any deterministic verification logic. You must independently research the role using web search and make your own evidence-based decision.',
+  'You are the primary verification and data-enrichment agent for a student placement tracker.',
+  `The tracker targets student placements that START IN ${TARGET_YEAR}.`,
   '',
-  'The tracker cares about student placements that START IN 2027: industrial placements, year-in-industry roles, undergraduate placements, long internships that are the industrial placement year, co-ops, and equivalent student work placements.',
-  'Do NOT treat graduate schemes, apprenticeships, summer-only internships that do not represent the 2027 placement year, or experienced-hire roles as qualifying placements.',
+  'You must independently research the exact tracked opportunity using web search. Do not rely on the database status as truth and do not use deterministic checks as a gate.',
   '',
-  'SEARCH THOROUGHLY. Use up to ' + MAX_WEB_SEARCHES + ' web searches. Search the exact role and employer first, then the employer student/early-career programme, then the employer live vacancies/ATS. Search sensible role-title variants and location variants. When useful, search Gradcracker and Trackr as discovery/corroboration sources, but prefer official employer evidence for final verification.',
+  'RESEARCH REQUIREMENT:',
+  `- Use up to ${MAX_WEB_SEARCHES} web searches intelligently. Search the exact role and employer first.`,
+  '- Then check the employer student/early-career programme, the live employer vacancy/ATS, and sensible title variants.',
+  '- Search Gradcracker and Trackr as discovery/corroboration sources where relevant.',
+  '- Search external ATS/job systems such as SmartRecruiters, Workday, Greenhouse, Lever, Taleo, SuccessFactors, Jobvite and equivalents when relevant.',
+  '- Do not conclude a role is closed because it is absent from a generic careers page or first page of an ATS. Search the relevant job board/filter/pagination.',
+  '- Distinguish the application opening date from the placement start date.',
+  '- A closed 2026 intake does not mean the 2027 intake is closed.',
+  '- Verify the exact tracked role, not a different role at the same company.',
   '',
-  'CRITICAL ANTI-MISS RULES:',
-  '- Never assume a generic careers or early-careers page represents the current live vacancy state.',
-  '- Never mark a role CLOSED simply because a generic job board page or first page of results does not show it. Search the board, use filters, and inspect pagination or alternate search results where applicable.',
-  '- A generic Apply, Search Jobs, View Jobs, or Careers button is NOT proof that the exact role is open.',
-  '- An individual live vacancy is stronger evidence than a generic programme page when they conflict.',
-  '- Search external ATS pages such as SmartRecruiters, Workday, Greenhouse, Lever, Taleo, SuccessFactors, Jobvite and similar platforms where relevant.',
-  '- Check for current intake dates and distinguish application opening date from placement start date.',
-  '- A closed 2026 intake is NOT evidence that the 2027 intake is closed. If 2027 is not yet published, use NOT_YET_PUBLISHED or EXPECTED as appropriate.',
-  '- If evidence conflicts, keep researching and prefer the most recent authoritative source. Use UNKNOWN rather than guessing.',
+  'STATUS RULES:',
+  'Open Now = exact 2027 student role currently accepts applications and there is direct application evidence.',
+  'Opening Soon = 2027 student role/programme confirmed and an opening date/month is explicitly published, but it is not open today.',
+  'Expected = 2027 student programme/intake confirmed but opening details are not published.',
+  'Not Yet Published = relevant student programme exists but the 2027 intake/role is not sufficiently published.',
+  'Closed = reliable evidence that the exact 2027 tracked intake is closed, filled, expired, withdrawn, or past deadline.',
+  'Unknown = evidence remains insufficient or conflicting after reasonable research.',
   '',
-  'STATUS DEFINITIONS:',
-  'OPEN_NOW = the exact 2027 student role is currently accepting applications and there is direct application evidence for that exact role.',
-  'OPENING_SOON = the employer clearly states when the relevant 2027 application window will open during 2026, but it is not open today.',
-  'EXPECTED = the employer clearly confirms a 2027/recurring student placement programme but has not published its 2027 opening details.',
-  'NOT_YET_PUBLISHED = a student programme exists, but the 2027 role/intake is not sufficiently published to establish a current or upcoming application window.',
-  'CLOSED = reliable current evidence establishes the exact 2027 role/intake is closed, filled, withdrawn, expired, or past deadline.',
-  'UNKNOWN = evidence remains insufficient or contradictory after reasonable research.',
+  'OPEN REQUIREMENTS: confirm student programme, 2027 intake, exact role, live availability, and direct application URL. A generic Apply/Search/View Jobs button is not enough.',
   '',
-  'OPEN_NOW REQUIREMENTS: confirm the student programme, 2027 intake, exact role, current live availability, and direct application page for the exact role. Do not set verified_application_url to a generic careers page.',
-  'CLOSED REQUIREMENTS: there must be evidence about the exact 2027 tracked role/intake. Do not infer closure from a stale 2026 page.',
+  'FULL RECORD ENRICHMENT — CRITICAL:',
+  'For every role, research and return every applicable database attribute, not just status.',
+  'Populate role/company/location/programme details, dates, application link, academic requirements, technical skills, eligibility/work authorisation, salary/benefits, source/verification data, and all priority/fit fields.',
+  'Priority fields are tracker-derived, not employer fields. Calculate them from the verified role and the user fit represented by this placement tracker. Use 0-10 integers and provide a role-specific overall_priority, why_it_fits, and potential_weaknesses.',
+  'Do not leave priority fields blank merely because an employer did not publish a score.',
+  'Do not use generic copy across roles; explain why THIS role fits and what its weaknesses are.',
   '',
-  'DETAILS: Extract opening date/timing, deadline and deadline type, location, salary, placement duration/type, degree requirements, and the strongest source URLs when explicitly evidenced. Do not invent missing values.',
+  'US RULE:',
+  'US roles may only be treated as eligible/confirmed when a UK citizen can apply and work there. Explicitly check citizenship, US-person status, right to work, sponsorship, ITAR/EAR/export controls, security clearance, and other restrictions. Do not assume sponsorship from silence. If UK-citizen eligibility cannot be established, use a non-confirmed status and make the restriction explicit in the eligibility fields/evidence.',
   '',
-  'SOURCE PRIORITY: official employer vacancy > official employer student programme > official ATS vacancy > reputable secondary listing such as Gradcracker/Trackr. Secondary sources are useful for discovering roles that official pages make difficult to find, but must not be treated as stronger than an official current employer vacancy.',
+  'DATES AND MISSING DATA:',
+  'Prefer exact dates. If only a month/season/rolling deadline is stated, record it honestly and set deadline_type accordingly. Never invent facts. Leave a string empty only after reasonable research fails to establish it.',
   '',
-  'Return only the structured result.'
+  'SOURCE PRIORITY: official employer exact vacancy > official employer careers/student programme > official ATS > Gradcracker/Trackr/other reputable secondary source.',
+  '',
+  'Return only the structured JSON result.'
 ].join('\n')
 
-function normaliseUrl(value) {
-  if (!value) return ''
-  try { return new URL(value).toString() } catch { return '' }
-}
+function asString(value) { return typeof value === 'string' ? value : '' }
+function asInt(value) { const n = Number(value); return Number.isFinite(n) ? Math.max(0, Math.min(10, Math.round(n))) : 0 }
+function asUrl(value) { const s = asString(value); try { return s ? new URL(s).toString() : '' } catch { return '' } }
 
-function rolePrompt(role) {
-  const urls = [role.application_link, role.careers_page, role.source_url]
-    .map(normaliseUrl).filter(Boolean)
-  const known = [...new Set(urls)]
-  return [
-    'Current date: ' + TODAY,
-    'Target placement start year: ' + TARGET_INTAKE,
-    '',
-    'Company: ' + (role.company ?? ''),
-    'Tracked role: ' + (role.specific_role ?? ''),
-    'Location: ' + [role.city, role.country].filter(Boolean).join(', '),
-    'Department: ' + (role.department ?? ''),
-    'Engineering area: ' + (role.engineering_area ?? ''),
-    'Current database status (not authoritative): ' + (role.application_status ?? ''),
-    known.length ? 'Known URLs:\n' + known.map(url => '- ' + url).join('\n') : 'Known URLs: none',
-    '',
-    'Independently research this exact tracked role. Search the exact title and employer, employer student programme, employer live vacancy/ATS, and sensible title variants. Use Gradcracker and Trackr as discovery/corroboration resources when relevant. Check for pagination/search filters on job boards. Verify the current 2027 intake and application state as of today.',
-    '',
-    'Do not rely on the current database status. It may be wrong. Do not treat a generic careers page or generic Apply button as proof of an open exact role.'
-  ].join('\n')
-}
-
-function safeString(value) { return typeof value === 'string' ? value : '' }
-function safeBool(value) { return value === true }
-function safeNum(value) {
-  const n = Number(value)
-  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : 0
-}
-
-function normaliseResult(raw) {
-  const result = {
-    status: states.includes(raw?.status) ? raw.status : 'UNKNOWN',
-    confidence: safeNum(raw?.confidence),
-    intake_year: safeString(raw?.intake_year),
-    intake_year_confirmed: safeBool(raw?.intake_year_confirmed),
-    exact_student_program_found: safeBool(raw?.exact_student_program_found),
-    exact_role_found: safeBool(raw?.exact_role_found),
-    direct_application_for_exact_role_found: safeBool(raw?.direct_application_for_exact_role_found),
-    official_program_source_found: safeBool(raw?.official_program_source_found),
-    opening_date: safeString(raw?.opening_date),
-    opening_timing: safeString(raw?.opening_timing),
-    deadline: safeString(raw?.deadline),
-    deadline_type: safeString(raw?.deadline_type),
-    verified_application_url: normaliseUrl(raw?.verified_application_url),
-    location_city: safeString(raw?.location_city),
-    location_country: safeString(raw?.location_country),
-    salary: safeString(raw?.salary),
-    degree_requirements: safeString(raw?.degree_requirements),
-    placement_duration: safeString(raw?.placement_duration),
-    placement_type: safeString(raw?.placement_type),
-    website: normaliseUrl(raw?.website),
-    evidence_summary: safeString(raw?.evidence_summary),
-    sources: Array.isArray(raw?.sources) ? raw.sources.filter(Boolean).slice(0, 8).map(source => ({
-      url: normaliseUrl(source.url),
-      type: safeString(source.type),
-      evidence: safeString(source.evidence)
-    })).filter(source => source.url) : []
+function normalise(raw, existing) {
+  const result = {}
+  for (const key of Object.keys(schema.properties)) {
+    const value = raw?.[key]
+    if (FIELD_TYPES[key] === 'integer') result[key] = Number.isFinite(Number(value)) ? Math.max(0, Math.round(Number(value))) : 0
+    else if (schema.properties[key]?.type === 'number') result[key] = Number.isFinite(Number(value)) ? Math.max(0, Math.min(1, Number(value))) : 0
+    else result[key] = asString(value)
   }
 
-  // Hard safety checks on the model's classification.
-  if (result.status === 'OPEN_NOW') {
-    const safeOpen = result.confidence >= MIN_OPEN_CONFIDENCE &&
-      result.intake_year_confirmed &&
-      result.intake_year === TARGET_INTAKE &&
-      result.exact_student_program_found &&
-      result.exact_role_found &&
-      result.direct_application_for_exact_role_found &&
-      result.official_program_source_found &&
-      !!result.verified_application_url
-    if (!safeOpen) result.status = 'UNKNOWN'
-  }
-  if (result.status === 'CLOSED' && result.confidence < MIN_CLOSED_CONFIDENCE) {
-    result.status = 'UNKNOWN'
-  }
+  result.application_status = STATES.includes(result.application_status) ? result.application_status : 'Unknown'
+  result.start_year = TARGET_YEAR
+  result.website = asUrl(result.website)
+  result.careers_page = asUrl(result.careers_page)
+  result.application_link = asUrl(result.application_link)
+  result.source_url = asUrl(result.source_url)
+  result.date_info_verified = result.date_info_verified || 'false'
+  result.source_date_checked = TODAY
+
+  result.sources = Array.isArray(raw?.sources)
+    ? raw.sources.map(source => ({ url: asUrl(source?.url), type: asString(source?.type), evidence: asString(source?.evidence) })).filter(x => x.url)
+    : []
+
+  result.source_verified = [
+    `Azure-only verification ${TODAY}: ${result.application_status} (${Math.round(Number(raw?.confidence || 0) * 100)}% confidence).`,
+    result.evidence_summary,
+    result.sources.length ? `Sources: ${result.sources.map(s => `${s.type}: ${s.url} — ${s.evidence}`).join(' | ')}` : ''
+  ].filter(Boolean).join('\n').slice(0, 5000)
+
+  // If the model claims Open Now without the core evidence, fail safe to Unknown.
+  const safeOpen = result.application_status === 'Open Now' &&
+    Number(raw?.confidence || 0) >= 0.80 &&
+    asString(raw?.intake_year || String(TARGET_YEAR)) === String(TARGET_YEAR) &&
+    raw?.exact_role_found !== false &&
+    raw?.direct_application_for_exact_role_found !== false &&
+    !!result.application_link
+  if (result.application_status === 'Open Now' && !safeOpen) result.application_status = 'Unknown'
+
   return result
 }
 
+function rolePrompt(role) {
+  const urls = [...new Set([role.application_link, role.careers_page, role.source_url].map(asUrl).filter(Boolean))]
+  return [
+    `Current date: ${TODAY}`,
+    `Target placement start year: ${TARGET_YEAR}`,
+    '',
+    `Company: ${role.company || ''}`,
+    `Tracked role: ${role.specific_role || ''}`,
+    `Location: ${[role.city, role.country].filter(Boolean).join(', ')}`,
+    `Department: ${role.department || ''}`,
+    `Engineering area: ${role.engineering_area || ''}`,
+    `Existing status (not authoritative): ${role.application_status || ''}`,
+    '',
+    'Known URLs:',
+    urls.length ? urls.map(url => `- ${url}`).join('\n') : '- none',
+    '',
+    'Independently research this exact role and return a complete, field-by-field record. Re-check every material fact, including status, dates, eligibility, salary, role details, application link, and all priority/fit attributes. Use the existing values only as clues; do not blindly copy them.'
+  ].join('\n')
+}
+
 async function verifyRole(role) {
-  const url = azureEndpoint + '/openai/v1/responses'
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const response = await fetch(url, {
+    const response = await fetch(`${azureEndpoint}/openai/v1/responses`, {
       method: 'POST',
       signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        'api-key': azureApiKey
-      },
+      headers: { 'Content-Type': 'application/json', 'api-key': azureApiKey },
       body: JSON.stringify({
         model: azureDeployment,
         input: [
@@ -219,113 +206,80 @@ async function verifyRole(role) {
           { role: 'user', content: [{ type: 'input_text', text: rolePrompt(role) }] }
         ],
         tools: [{ type: 'web_search' }],
-        max_output_tokens: 1800,
-        text: {
-          format: {
-            type: 'json_schema',
-            name: 'azure_placement_verification',
-            strict: true,
-            schema
-          }
-        }
+        max_output_tokens: 2600,
+        text: { format: { type: 'json_schema', name: 'azure_full_placement_record', strict: true, schema } }
       })
     })
 
     const body = await response.json()
-    if (!response.ok) throw new Error(body?.error?.message || ('Azure HTTP ' + response.status))
+    if (!response.ok) throw new Error(body?.error?.message || `Azure HTTP ${response.status}`)
     if (!body?.output_text) throw new Error('Azure returned no output_text')
     let parsed
     try { parsed = JSON.parse(body.output_text) } catch { throw new Error('Azure returned invalid JSON') }
-    return { ok: true, result: normaliseResult(parsed) }
+    return { ok: true, result: normalise(parsed, role) }
   } finally {
     clearTimeout(timer)
   }
 }
 
-function protectedApplicationStatus(value) {
-  const status = String(value ?? '').trim().toLowerCase()
-  return ['applied', 'application submitted', 'interview', 'interviewing', 'rejected', 'offer', 'offered', 'accepted', 'withdrawn', 'not interested']
-    .some(item => status === item || status.includes(item))
-}
-
-function evidenceText(result, role) {
-  const sources = result.sources.map(source => `- ${source.type}: ${source.url} — ${source.evidence}`).join('\n')
-  return [
-    `Azure-only verification ${TODAY}: ${result.status} (${Math.round(result.confidence * 100)}% confidence).`,
-    `Student programme: ${result.exact_student_program_found ? 'verified' : 'not verified'}; exact role: ${result.exact_role_found ? 'verified' : 'not verified'}; 2027 intake: ${result.intake_year_confirmed ? 'confirmed' : 'not confirmed'}.`,
-    `Direct exact-role application: ${result.direct_application_for_exact_role_found ? 'verified' : 'not verified'}; official programme source: ${result.official_program_source_found ? 'verified' : 'not verified'}.`,
-    result.opening_date ? `Opening date: ${result.opening_date}.` : '',
-    result.opening_timing ? `Opening timing: ${result.opening_timing}.` : '',
-    result.deadline ? `Deadline: ${result.deadline}${result.deadline_type ? ` (${result.deadline_type})` : ''}.` : '',
-    result.evidence_summary,
-    sources ? `Evidence sources:\n${sources}` : ''
-  ].filter(Boolean).join('\n').slice(0, 5000)
-}
-
 async function updateRole(role, result) {
-  const update = {
-    source_date_checked: TODAY,
-    source_verified: evidenceText(result, role),
-    updated_at: new Date().toISOString()
-  }
+  const update = { updated_at: new Date().toISOString() }
 
-  if (!protectedApplicationStatus(role.app_status)) {
-    const mapping = {
-      OPEN_NOW: 'Open Now',
-      OPENING_SOON: 'Opening Soon',
-      EXPECTED: 'Expected',
-      NOT_YET_PUBLISHED: 'Not Yet Published',
-      CLOSED: 'Closed',
-      UNKNOWN: 'Unknown'
-    }
-    if (!protectedApplicationStatus(role.application_status)) {
-      update.application_status = mapping[result.status]
+  // Refresh all non-user-managed fields. Empty AI values do not erase existing data;
+  // this prevents a transient search failure from destroying previously verified facts.
+  const fields = Object.keys(schema.properties)
+  for (const field of fields) {
+    if (USER_MANAGED.has(field)) continue
+    if (field === 'confidence' || field === 'evidence_summary' || field === 'sources') continue
+    const value = result[field]
+    if (typeof value === 'string') {
+      if (value.trim() !== '' || field === 'application_status' || field === 'start_year') update[field] = value
+    } else if (typeof value === 'number') {
+      update[field] = value
     }
   }
 
-  if (result.opening_date) update.exact_opening_date = result.opening_date
-  if (result.deadline) update.exact_deadline = result.deadline
-  if (result.deadline_type) update.deadline_type = result.deadline_type
+  // Never clobber the user's application-management status by replacing it with availability state.
+  // application_status is the vacancy's availability state; app_status is user's tracking state.
+  // Keep app_status untouched.
 
-  // Only trust an application URL when Azure verified it is the exact live role.
-  if (result.status === 'OPEN_NOW' && result.direct_application_for_exact_role_found && result.verified_application_url) {
-    update.application_link = result.verified_application_url
-  }
+  update.source_date_checked = TODAY
+  update.source_verified = result.source_verified
+  update.start_year = TARGET_YEAR
 
-  // Fill objectively verified non-application metadata when present, without touching user tracking.
-  if (result.location_city) update.city = result.location_city
-  if (result.location_country) update.country = result.location_country
-  if (result.salary) update.salary = result.salary
-  if (result.degree_requirements) update.degree_requirements = result.degree_requirements
-  if (result.placement_duration) update.placement_duration = result.placement_duration
-  if (result.placement_type) update.placement_type = result.placement_type
-  if (result.website) update.website = result.website
-
+  // Store evidence in source_verified, not notes, so user notes remain untouched.
   const { error } = await supabase.from('placements').update(update).eq('id', role.id)
   if (error) throw error
 }
 
-async function main() {
-  const { data: roles, error } = await supabase
-    .from('placements')
-    .select('*')
-    .order('company', { ascending: true })
+function completeness(result) {
+  const keys = Object.keys(schema.properties).filter(key => !['confidence', 'evidence_summary', 'sources'].includes(key))
+  return keys.filter(key => {
+    const value = result[key]
+    return value !== '' && value !== null && value !== undefined
+  }).length
+}
 
+async function main() {
+  const { data: roles, error } = await supabase.from('placements').select('*').order('company', { ascending: true })
   if (error) throw error
-  console.log(`Azure-only audit: ${roles?.length ?? 0} rows loaded.`)
+
+  console.log(`Azure-only full enrichment audit: ${roles?.length ?? 0} rows loaded.`)
 
   let cursor = 0
-  let open = 0
   let changed = 0
-  let unchanged = 0
-  let skipped = 0
+  let open = 0
+  let enriched = 0
   let errors = 0
+  let skipped = 0
+  let incomplete = 0
 
   async function worker() {
     while (true) {
       const index = cursor++
       if (index >= (roles ?? []).length) return
       const role = roles[index]
+
       if (role.not_interested === true || String(role.app_status ?? '').trim().toLowerCase() === 'not interested') {
         skipped++
         continue
@@ -334,16 +288,18 @@ async function main() {
       try {
         const verification = await verifyRole(role)
         if (!verification.ok) throw new Error(verification.error || 'Azure verification failed')
-        const before = String(role.application_status ?? '')
-        await updateRole(role, verification.result)
-        const after = ({
-          OPEN_NOW: 'Open Now', OPENING_SOON: 'Opening Soon', EXPECTED: 'Expected',
-          NOT_YET_PUBLISHED: 'Not Yet Published', CLOSED: 'Closed', UNKNOWN: 'Unknown'
-        })[verification.result.status]
-        if (after === 'Open Now') open++
-        if (before === after) unchanged++
-        else changed++
-        console.log(`${role.company} — ${role.specific_role ?? 'role'}: ${verification.result.status} (${Math.round(verification.result.confidence * 100)}%)`)
+
+        const beforeStatus = String(role.application_status ?? '')
+        const result = verification.result
+        await updateRole(role, result)
+
+        const afterStatus = result.application_status
+        if (afterStatus === 'Open Now') open++
+        if (afterStatus !== beforeStatus) changed++
+        if (completeness(result) >= 30) enriched++
+        else incomplete++
+
+        console.log(`${role.company} — ${role.specific_role ?? 'role'}: ${afterStatus}; enriched fields=${completeness(result)}`)
       } catch (error) {
         errors++
         console.error(`${role.company} — ${role.specific_role ?? 'role'}: ${error?.message ?? error}`)
@@ -353,13 +309,19 @@ async function main() {
 
   await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT, roles?.length ?? 0) }, worker))
 
-  const { count, error: countError } = await supabase
+  const { data: checkedRows, error: checkError } = await supabase
     .from('placements')
-    .select('id', { count: 'exact', head: true })
-  if (countError) throw countError
+    .select('id,company,specific_role,application_status,start_year,source_date_checked,source_verified,cv_fit,aerospace_relevance,rocket_space_relevance,f1_motorsport_relevance,aero_cfd_relevance,propulsion_relevance,controls_avionics_relevance,prestige,career_value,overall_priority,why_it_fits,potential_weaknesses')
+    .eq('source_date_checked', TODAY)
+  if (checkError) throw checkError
 
-  console.log(`Azure-only audit complete: ${open} open, ${changed} status changes, ${unchanged} unchanged, ${skipped} skipped, ${errors} errors.`)
-  console.log(`Row count after=${count}. No rows are inserted or deleted by this verifier.`)
+  const missingPriority = (checkedRows ?? []).filter(row =>
+    PRIORITY_FIELDS.some(field => row[field] === null || row[field] === undefined) ||
+    !row.overall_priority || !row.why_it_fits || !row.potential_weaknesses
+  ).length
+
+  console.log(`Azure-only audit complete: ${open} open, ${changed} status changes, ${enriched} well-enriched, ${incomplete} with material missing fields, ${skipped} skipped, ${errors} errors.`)
+  console.log(`QC: ${checkedRows?.length ?? 0} rows checked today; ${missingPriority} rows still missing one or more priority/fit fields.`)
 }
 
 main().catch(error => {
