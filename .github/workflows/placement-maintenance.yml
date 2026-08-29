@@ -2,10 +2,12 @@ name: Placement Maintenance
 
 on:
   schedule:
-    # Existing maintenance cadence retained. Verification is now Azure-only.
-    # GitHub cron is UTC and ignores UK daylight saving.
-    - cron: '30 8 * * *'
-    - cron: '0 17 * * *'
+    # GitHub cron is UTC and does not support IANA time zones directly.
+    # Run at both 15:00 and 16:00 UTC, then allow only the invocation whose
+    # Europe/London local time is exactly 16:00. This keeps the effective
+    # schedule at 4:00 PM UK time across BST/GMT transitions.
+    - cron: '0 15 * * *'
+    - cron: '0 16 * * *'
   workflow_dispatch:
 
 permissions:
@@ -30,6 +32,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      - name: Run only at 4:00 PM UK time
+        run: |
+          if [ "$(TZ=Europe/London date +%H:%M)" != "16:00" ]; then
+            echo "This UTC trigger is not the 4:00 PM Europe/London invocation; skipping."
+            exit 0
+          fi
+          echo "Proceeding at $(TZ=Europe/London date '+%Y-%m-%d %H:%M %Z') Europe/London."
 
       - name: Install dependencies
         run: npm ci
