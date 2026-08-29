@@ -10,6 +10,7 @@
     "monitor": "node scripts/role-monitor.mjs",
     "discover": "node scripts/placement-discovery.mjs",
     "audit": "node scripts/placement-audit.mjs",
+    "audit:azure": "node scripts/azure-placement-audit.mjs",
     "verify-tracking-features": "node scripts/verify-tracking-features-v2.mjs"
   },
   "dependencies": {
