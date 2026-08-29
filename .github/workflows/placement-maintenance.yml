@@ -2,9 +2,8 @@ name: Placement Maintenance
 
 on:
   schedule:
-    # 09:30 and 18:00 UK time. GitHub cron is UTC and ignores UK daylight saving,
-    # so these are 08:30/17:00 UTC during British Summer Time (Mar-Oct);
-    # in winter (GMT) they will run one hour earlier in UK local time.
+    # Existing maintenance cadence retained. Verification is now Azure-only.
+    # GitHub cron is UTC and ignores UK daylight saving.
     - cron: '30 8 * * *'
     - cron: '0 17 * * *'
   workflow_dispatch:
@@ -35,13 +34,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Discover new 2027 placements (deterministic → Azure when needed)
+      - name: Discover new 2027 placements
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          # Discovery crawls existing tracked career sources only. The shared
-          # verifier gathers deterministic evidence first and escalates to Azure
-          # only when that evidence is ambiguous.
           USE_GROQ: 'false'
           USE_AZURE: 'true'
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
@@ -50,16 +46,11 @@ jobs:
           USE_OPENAI: 'false'
         run: npm run discover
 
-      - name: Audit every placement (deterministic → Azure when needed)
+      - name: Azure-only verification of every placement
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          # Groq is deliberately disabled. The verifier gathers deterministic
-          # evidence first and Azure is used only for uncertainty/disagreement.
-          USE_GROQ: 'false'
-          USE_AZURE: 'true'
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
-          USE_OPENAI: 'false'
-        run: npm run audit
+        run: npm run audit:azure
