@@ -10,6 +10,9 @@ on:
     - cron: '0 16 * * *'
   workflow_dispatch:
 
+env:
+  RUN_MAINTENANCE: 'false'
+
 permissions:
   contents: read
 
@@ -24,27 +27,34 @@ jobs:
     timeout-minutes: 360
 
     steps:
+      - name: Determine 4 PM UK invocation
+        run: |
+          UK_TIME="$(TZ=Europe/London date +%H:%M)"
+          if [ "$UK_TIME" = "16:00" ]; then
+            echo "RUN_MAINTENANCE=true" >> "$GITHUB_ENV"
+            echo "Proceeding at $(TZ=Europe/London date '+%Y-%m-%d %H:%M %Z') Europe/London."
+          else
+            echo "RUN_MAINTENANCE=false" >> "$GITHUB_ENV"
+            echo "Skipping non-4 PM UK trigger at $(TZ=Europe/London date '+%Y-%m-%d %H:%M %Z') Europe/London."
+          fi
+
       - name: Checkout
+        if: env.RUN_MAINTENANCE == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Node.js
+        if: env.RUN_MAINTENANCE == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      - name: Run only at 4:00 PM UK time
-        run: |
-          if [ "$(TZ=Europe/London date +%H:%M)" != "16:00" ]; then
-            echo "This UTC trigger is not the 4:00 PM Europe/London invocation; skipping."
-            exit 0
-          fi
-          echo "Proceeding at $(TZ=Europe/London date '+%Y-%m-%d %H:%M %Z') Europe/London."
-
       - name: Install dependencies
+        if: env.RUN_MAINTENANCE == 'true'
         run: npm ci
 
       - name: Discover new 2027 placements
+        if: env.RUN_MAINTENANCE == 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -57,6 +67,7 @@ jobs:
         run: npm run discover
 
       - name: Azure-only verification of every placement
+        if: env.RUN_MAINTENANCE == 'true'
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
