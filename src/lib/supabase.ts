@@ -10,6 +10,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 export type ApplicationStatus = 'Open Now' | 'Opening Soon' | 'Expected' | 'Not Yet Published' | 'Closed'
 export type OverallPriority = 'APPLY_IMMEDIATELY' | 'APPLY_WHEN_OPENING' | 'HIGH_PRIORITY_WATCH' | 'GOOD_BACKUP' | 'LOW_PRIORITY'
 export type AppStatus = 'Not Applied' | 'Saved' | 'Applied' | 'Assessment' | 'Interview' | 'Final Interview' | 'Offer' | 'Accepted' | 'Rejected' | 'Withdrawn'
+export type OpportunityType = 'Industrial Placement' | 'Spring Week / Insight' | 'Internship / Co-op' | 'Other Student Programme'
 
 export interface Placement {
   id: string
@@ -22,6 +23,7 @@ export interface Placement {
   specific_role: string | null
   department: string | null
   engineering_area: string | null
+  opportunity_type: string | null
   placement_type: string | null
   placement_duration: string | null
   placement_start_date: string | null
