@@ -4,7 +4,7 @@ import { PRIORITY_LABELS, PRIORITY_ORDER, sortPlacements } from './utils'
 
 const COLUMN_HEADERS = [
   'Company', 'Sector', 'Country', 'City / Location', 'Website', 'Careers Page',
-  'Specific Role', 'Department', 'Engineering Area', 'Placement Type', 'Placement Duration',
+  'Specific Role', 'Department', 'Engineering Area', 'Opportunity Type', 'Placement Type', 'Placement Duration',
   'Placement Start Date', 'Placement End Date',
   'Application Status', 'Exact Opening Date', 'Exact Deadline', 'Deadline Type', 'Date Info Verified', 'Application Link',
   'Degree Requirements', 'Min Grade Requirement', 'Year of Study Requirement', 'Required Technical Skills',
@@ -21,7 +21,7 @@ const COLUMN_HEADERS = [
 function placementToRow(p: Placement): (string | number)[] {
   return [
     p.company, p.sector ?? '', p.country ?? '', p.city ?? '', p.website ?? '', p.careers_page ?? '',
-    p.specific_role ?? '', p.department ?? '', p.engineering_area ?? '', p.placement_type ?? '', p.placement_duration ?? '',
+    p.specific_role ?? '', p.department ?? '', p.engineering_area ?? '', p.opportunity_type ?? '', p.placement_type ?? '', p.placement_duration ?? '',
     p.placement_start_date ?? '', p.placement_end_date ?? '',
     p.application_status ?? '', p.exact_opening_date ?? '', p.exact_deadline ?? '', p.deadline_type ?? '', p.date_info_verified ?? '', p.application_link ?? '',
     p.degree_requirements ?? '', p.min_grade_requirement ?? '', p.year_of_study_requirement ?? '', p.required_technical_skills ?? '',
@@ -85,9 +85,9 @@ function buildOpeningSoonSheet(placements: Placement[]): XLSX.WorkSheet {
 
 function buildTop25Sheet(placements: Placement[]): XLSX.WorkSheet {
   const sorted = sortPlacements(placements).slice(0, 25)
-  const headers = ['Rank', 'Company', 'Sector', 'Role', 'CV Fit /10', 'Overall Priority', 'Application Status', 'Why It Fits']
+  const headers = ['Rank', 'Company', 'Opportunity Type', 'Sector', 'Role', 'CV Fit /10', 'Overall Priority', 'Application Status', 'Why It Fits']
   const rows = sorted.map((p, i) => [
-    i + 1, p.company, p.sector ?? '', p.specific_role ?? '', p.cv_fit ?? '',
+    i + 1, p.company, p.opportunity_type ?? '', p.sector ?? '', p.specific_role ?? '', p.cv_fit ?? '',
     p.overall_priority ? PRIORITY_LABELS[p.overall_priority as OverallPriority] : '',
     p.application_status ?? '', p.why_it_fits ?? '',
   ])
@@ -107,10 +107,10 @@ function buildSectorSheet(placements: Placement[], sector: string): XLSX.WorkShe
 }
 
 function buildAppTrackerSheet(placements: Placement[]): XLSX.WorkSheet {
-  const headers = ['Company', 'Role', 'Deadline', 'Priority', 'Applied?', 'Date Applied', 'Interview?', 'Offer?', 'Rejected?', 'Notes']
+  const headers = ['Company', 'Role', 'Opportunity Type', 'Deadline', 'Priority', 'Applied?', 'Date Applied', 'Interview?', 'Offer?', 'Rejected?', 'Notes']
   const sorted = sortPlacements(placements)
   const rows = sorted.map((p) => [
-    p.company, p.specific_role ?? '', p.exact_deadline ?? '',
+    p.company, p.specific_role ?? '', p.opportunity_type ?? '', p.exact_deadline ?? '',
     p.overall_priority ? PRIORITY_LABELS[p.overall_priority as OverallPriority] : '',
     p.app_status ?? 'Not Applied', p.date_applied ?? '',
     p.app_status === 'Interview' ? 'Yes' : '', p.app_status === 'Offer' ? 'Yes' : '',
@@ -123,10 +123,10 @@ function buildAppTrackerSheet(placements: Placement[]): XLSX.WorkSheet {
 }
 
 function buildSourcesSheet(placements: Placement[]): XLSX.WorkSheet {
-  const headers = ['Company', 'Source URL', 'Source Type', 'Date Checked', 'What Was Verified']
+  const headers = ['Company', 'Opportunity Type', 'Source URL', 'Source Type', 'Date Checked', 'What Was Verified']
   const sorted = sortPlacements(placements)
   const rows = sorted.map((p) => [
-    p.company, p.source_url ?? '', p.source_type ?? '', p.source_date_checked ?? '', p.source_verified ?? '',
+    p.company, p.opportunity_type ?? '', p.source_url ?? '', p.source_type ?? '', p.source_date_checked ?? '', p.source_verified ?? '',
   ])
   const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
   ws['!freeze'] = { xSplit: 0, ySplit: 1 }
@@ -141,9 +141,11 @@ export function downloadExcel(placements: Placement[]) {
   XLSX.utils.book_append_sheet(wb, buildApplyNowSheet(placements), 'APPLY NOW')
   XLSX.utils.book_append_sheet(wb, buildOpeningSoonSheet(placements), 'OPENING SOON')
   XLSX.utils.book_append_sheet(wb, buildTop25Sheet(placements), 'TOP 25')
-  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'F1 & Motorsport'), 'F1 & MOTORSPORT')
-  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'Rockets & Space'), 'ROCKETS & SPACE')
-  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'Aerospace & Defence'), 'AEROSPACE & DEFENCE')
+  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'Motorsport'), 'MOTORSPORT')
+  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'Aerospace & Space'), 'AEROSPACE & SPACE')
+  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'Defence'), 'DEFENCE')
+  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'Engineering & Technology'), 'ENGINEERING & TECHNOLOGY')
+  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'Research & Advanced Tech'), 'RESEARCH & ADVANCED TECH')
   XLSX.utils.book_append_sheet(wb, buildAppTrackerSheet(placements), 'APPLICATION TRACKER')
   XLSX.utils.book_append_sheet(wb, buildSourcesSheet(placements), 'SOURCES')
 
