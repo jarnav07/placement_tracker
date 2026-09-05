@@ -1,7 +1,8 @@
 // Audit every placement row and update its availability based on rigorous,
 // evidence-gated verification. This script NEVER deletes rows and NEVER touches
 // the user's application-tracking fields (app_status, dates, CV version, referral,
-// interview, outcome, notes, not_interested).
+// interview, notes, not_interested), and never writes the derived ranking columns
+// (priority_score / overall_priority), which a Postgres trigger owns.
 //
 // It only updates:
 //   - application_status  (only when the verifier is confident)
@@ -38,6 +39,16 @@ const DELAY_MS = useAzure ? 500 : (useOpenAi ? 700 : 350)
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+/** The database CHECKs this column; anything unrecognised becomes null. */
+function normaliseDeadlineType(value) {
+  const text = String(value ?? '').toLowerCase()
+  if (!text) return null
+  if (text.includes('rolling')) return 'Rolling'
+  if (/fixed|window|campaign|wave/.test(text)) return 'Fixed'
+  if (/vacancy|role|programme|program|country/.test(text)) return 'Vacancy dependent'
+  return 'TBC'
+}
+
 // Optional safety backup. Requires the create_placements_backup RPC to be installed
 // (see supabase/migrations). If it is not installed, this logs a warning and continues;
 // the audit itself is still strictly non-destructive.
@@ -55,18 +66,18 @@ async function tryBackup() {
 }
 
 async function processRow(row) {
-  if (row.not_interested === true) return 'SKIPPED_NOT_INTERESTED'
+  // Archived scrape artefacts and roles the user rejected are not worth a fetch.
+  if (row.archived === true) return 'SKIPPED'
+  if (row.not_interested === true) return 'SKIPPED'
 
   const verification = await verifyPlacement({
     company: row.company,
     specific_role: row.specific_role,
     city: row.city,
     country: row.country,
-    department: row.department,
     engineering_area: row.engineering_area,
     application_link: row.application_link,
     careers_page: row.careers_page,
-    source_url: row.source_url,
     application_status: row.application_status
   })
 
@@ -90,7 +101,8 @@ async function processRow(row) {
   }
   if (result.opening_date) update.exact_opening_date = result.opening_date
   if (result.deadline) update.exact_deadline = result.deadline
-  if (result.deadline_type) update.deadline_type = result.deadline_type
+  const deadlineType = normaliseDeadlineType(result.deadline_type)
+  if (deadlineType) update.deadline_type = deadlineType
 
   // Only replace the tracked link when the verifier found the actual application
   // page for the exact, currently-open 2027 role.
@@ -138,7 +150,7 @@ async function main() {
       const index = cursor++
       if (index >= (rows ?? []).length) return
       const outcome = await processRow(rows[index])
-      if (outcome === 'SKIPPED_NOT_INTERESTED') skipped++
+      if (outcome === 'SKIPPED') skipped++
       else if (outcome === 'ERROR') errors++
       else if (outcome === 'NO_CHANGE') unchanged++
       else changed++
@@ -154,7 +166,7 @@ async function main() {
 
   if (afterError) throw afterError
 
-  console.log(`Audit complete: ${changed} statuses changed, ${unchanged} verified with no change, ${skipped} Not Interested skipped, ${errors} errors.`)
+  console.log(`Audit complete: ${changed} statuses changed, ${unchanged} verified with no change, ${skipped} archived/not-interested skipped, ${errors} errors.`)
   console.log(`Row count before=${before}, after=${after}.`)
   if (after !== before) {
     console.error('WARNING: row count changed during audit. This script never deletes rows — investigate manually.')

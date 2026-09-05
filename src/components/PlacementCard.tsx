@@ -1,26 +1,92 @@
-import { useState } from 'react'
-import type { Placement, OverallPriority, AppStatus } from '../lib/supabase'
-import { PRIORITY_LABELS, PRIORITY_COLORS, scoreBarColor, isTBC } from '../lib/utils'
+import type { Placement } from '../lib/supabase'
+import { PRIORITY_COLORS, PRIORITY_LABELS, STATUS_COLORS, orDash, relativeDays, formatDate, slug } from '../lib/utils'
+import { priorityOf, priorityScoreOf, domainRelevance } from '../lib/ranking'
+import { countryGroup, daysUntil, sectorGroup } from '../lib/filtering'
+import { Pill, ScoreDial } from './ui'
 import './PlacementCard.css'
 
-interface Props { placement: Placement; isNew?: boolean; onUpdate?: (p: Placement) => void; defaultExpanded?: boolean }
-const APP_STAGES: AppStatus[] = ['Not Applied','Saved','Applied','Assessment','Interview','Final Interview','Offer','Accepted','Rejected','Withdrawn']
-function ScoreBar({ label, score }: { label: string; score: number | null }) { const val = score ?? 0; return <div className="score-row"><span className="score-label">{label}</span><div className="score-bar-track"><div className="score-bar-fill" style={{ width: `${(val / 10) * 100}%`, background: scoreBarColor(val) }} /></div><span className="score-value">{val}/10</span></div> }
-function DetailItem({ label, value }: { label: string; value: string | null }) { if (!value || isTBC(value)) return null; return <div className="detail-item"><span className="detail-label">{label}</span><span className="detail-value">{value}</span></div> }
-export default function PlacementCard({ placement: p, isNew, onUpdate, defaultExpanded = false }: Props) {
-  const [expanded, setExpanded] = useState(defaultExpanded); const priority = (p.overall_priority ?? 'LOW_PRIORITY') as OverallPriority; const appStatus = (p.app_status ?? 'Not Applied') as AppStatus; const priorityColor = PRIORITY_COLORS[priority]; const priorityLabel = PRIORITY_LABELS[priority]; const statusClass = (p.application_status ?? '').replace(/\s+/g, '-').toLowerCase()
-  const patch = (changes: Partial<Placement>) => onUpdate?.({ ...p, ...changes }); const handleStage = (e: React.ChangeEvent<HTMLSelectElement>) => { e.stopPropagation(); const next = e.target.value as AppStatus; patch({ app_status: next, date_applied: next === 'Applied' && !p.date_applied ? new Date().toISOString().slice(0, 10) : p.date_applied }) }; const handleField = (field: keyof Placement, value: string | null) => patch({ [field]: value } as Partial<Placement>); const toggleNotInterested = (e: React.MouseEvent<HTMLButtonElement>) => { e.stopPropagation(); patch({ not_interested: !p.not_interested }) }
-  return <article className={`placement-card priority-${priority.replace(/_/g, '-').toLowerCase()} ${isNew ? 'is-new' : ''} ${expanded ? 'is-expanded' : ''}`} onClick={() => setExpanded(e => !e)}>
-    <div className="pc-header"><div className="pc-titles"><h3 className="pc-company">{p.company}</h3><span className="pc-role">{p.specific_role ?? 'Role TBC'}</span></div><div className="pc-badges"><span className="priority-badge" style={{ background: priorityColor }}>{priorityLabel}</span><span className={`status-badge status-${statusClass}`}>{p.application_status ?? 'TBC'}</span></div></div>
-    <div className="pc-meta"><span className="meta-chip">{p.opportunity_type ?? p.placement_type ?? 'Student Programme'}</span><span className="meta-chip">{p.sector ?? '—'}</span><span className="meta-chip">{p.city ?? 'TBC'}, {p.country ?? 'TBC'}</span><span className="meta-chip">{p.placement_duration ?? 'TBC'}</span>{appStatus !== 'Not Applied' && <span className={`app-stage-chip app-stage-${appStatus.toLowerCase().replace(/\s+/g,'-')}`}>{appStatus}</span>}</div>
-    <div className="pc-scores"><div className="cv-fit-display"><span className="cv-fit-number" style={{ color: scoreBarColor(p.cv_fit ?? 0) }}>{p.cv_fit ?? '?'}</span><span className="cv-fit-label">CV Fit /10</span></div><div className="mini-scores"><div className="mini-score"><span>Aero</span><b>{p.aerospace_relevance ?? '?'}</b></div><div className="mini-score"><span>Space</span><b>{p.rocket_space_relevance ?? '?'}</b></div><div className="mini-score"><span>F1</span><b>{p.f1_motorsport_relevance ?? '?'}</b></div><div className="mini-score"><span>CFD</span><b>{p.aero_cfd_relevance ?? '?'}</b></div><div className="mini-score"><span>Prop</span><b>{p.propulsion_relevance ?? '?'}</b></div><div className="mini-score"><span>Ctrl</span><b>{p.controls_avionics_relevance ?? '?'}</b></div></div></div>
-    <div className="pc-key-info"><div className="key-info-row"><span className="ki-label">Opens</span><span className="ki-value">{p.exact_opening_date ?? 'TBC'}</span></div><div className="key-info-row"><span className="ki-label">Deadline</span><span className="ki-value">{p.exact_deadline ?? 'TBC'}</span></div><div className="key-info-row"><span className="ki-label">Salary</span><span className="ki-value">{p.salary ?? 'TBC'}</span></div></div>
-    <div className={`pc-details ${expanded ? 'show' : ''}`}><p className="pc-why"><strong>Why it fits:</strong> {p.why_it_fits ?? 'TBC'}</p><p className="pc-weaknesses"><strong>Concerns:</strong> {p.potential_weaknesses ?? 'TBC'}</p><div className="pc-scores-grid"><ScoreBar label="Aerospace" score={p.aerospace_relevance}/><ScoreBar label="Rocket/Space" score={p.rocket_space_relevance}/><ScoreBar label="F1/Motorsport" score={p.f1_motorsport_relevance}/><ScoreBar label="Aero/CFD" score={p.aero_cfd_relevance}/><ScoreBar label="Propulsion" score={p.propulsion_relevance}/><ScoreBar label="Controls/Avionics" score={p.controls_avionics_relevance}/><ScoreBar label="Prestige" score={p.prestige}/><ScoreBar label="Career Value" score={p.career_value}/></div>
-      <div className="pc-detail-section"><h4>Eligibility</h4><DetailItem label="Degree" value={p.degree_requirements}/><DetailItem label="Min Grade" value={p.min_grade_requirement}/><DetailItem label="Year of Study" value={p.year_of_study_requirement}/><DetailItem label="Skills" value={p.required_technical_skills}/><DetailItem label="Citizenship" value={p.citizenship_requirement}/><DetailItem label="Right to Work" value={p.right_to_work_requirement}/><DetailItem label="Security Clearance" value={p.security_clearance_requirement}/><DetailItem label="Visa" value={p.visa_requirement}/></div>
-      <div className="pc-detail-section"><h4>Programme Details</h4><DetailItem label="Opportunity Type" value={p.opportunity_type}/><DetailItem label="Type" value={p.placement_type}/><DetailItem label="Duration" value={p.placement_duration}/><DetailItem label="Start" value={p.placement_start_date}/><DetailItem label="End" value={p.placement_end_date}/><DetailItem label="Department" value={p.department}/><DetailItem label="Benefits" value={p.other_benefits}/></div>
-      <div className="pc-detail-section application-tracking"><h4>Application Tracking</h4><div className="tracking-grid"><label>Stage<select value={appStatus} onChange={handleStage} onClick={e=>e.stopPropagation()}>{APP_STAGES.map(s=><option key={s}>{s}</option>)}</select></label><label>Date applied<input type="date" value={p.date_applied ?? ''} onChange={e=>handleField('date_applied',e.target.value||null)} onClick={e=>e.stopPropagation()}/></label><label>Interview date<input type="date" value={p.interview_date ?? ''} onChange={e=>handleField('interview_date',e.target.value||null)} onClick={e=>e.stopPropagation()}/></label><label>CV version<input type="text" placeholder="e.g. Aerospace v4" value={p.cv_version ?? ''} onChange={e=>handleField('cv_version',e.target.value||null)} onClick={e=>e.stopPropagation()}/></label><label>Referral / contact<input type="text" placeholder="Name or LinkedIn" value={p.referral_contact ?? ''} onChange={e=>handleField('referral_contact',e.target.value||null)} onClick={e=>e.stopPropagation()}/></label><label>Cover letter<select value={p.cover_letter_required ?? ''} onChange={e=>handleField('cover_letter_required',e.target.value||null)} onClick={e=>e.stopPropagation()}><option value="">Not recorded</option><option value="Yes">Yes</option><option value="No">No</option><option value="Submitted">Submitted</option></select></label></div><label className="tracking-notes">Notes<textarea rows={3} placeholder="Interview notes, next steps, contacts, reminders…" value={p.notes ?? ''} onChange={e=>handleField('notes',e.target.value||null) } onClick={e=>e.stopPropagation()}/></label><DetailItem label="Outcome" value={p.outcome}/></div>
-      <div className="pc-detail-section"><h4>Verification</h4><DetailItem label="Source Verified" value={p.source_verified}/><DetailItem label="Source URL" value={p.source_url}/></div><div className="pc-actions">{p.application_link&&<a href={p.application_link} target="_blank" rel="noopener noreferrer" className="pc-apply-btn" onClick={e=>e.stopPropagation()}>{p.application_status==='Open Now'||p.application_status==='Open'?'Apply Now':'View Careers Page'}</a>}{p.website&&<a href={p.website} target="_blank" rel="noopener noreferrer" className="pc-website-btn" onClick={e=>e.stopPropagation()}>Company Website</a>}</div>
-      <button className={`pc-not-interested-btn ${p.not_interested ? 'active' : ''}`} onClick={toggleNotInterested}>{p.not_interested ? 'Move back to opportunities' : 'Not interested'}</button>
-    </div><button className="pc-expand" onClick={e=>{e.stopPropagation();setExpanded(e2=>!e2)}}>{expanded?'Show less':'View details'}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`chevron ${expanded?'up':''}`}><polyline points="6 9 12 15 18 9"/></svg></button>
-  </article>
+interface Props {
+  placement: Placement
+  isNew?: boolean
+  isSelected?: boolean
+  onOpen: () => void
+}
+
+/**
+ * The board card: one card per ROLE, never per company. A company running four
+ * distinct placements gets four cards, each with its own rank, fit and deadline.
+ */
+export default function PlacementCard({ placement: p, isNew, isSelected, onOpen }: Props) {
+  const priority = priorityOf(p)
+  const score = priorityScoreOf(p)
+  const deadlineIn = daysUntil(p.exact_deadline)
+  const urgent = deadlineIn !== null && deadlineIn >= 0 && deadlineIn <= 21
+  // The scraped `city` sometimes already carries the country; do not repeat it.
+  const cityText = (p.city ?? '').trim()
+  const countryText = (p.country ?? '').trim()
+  const location = [cityText, countryText.toLowerCase() && cityText.toLowerCase().includes(countryText.toLowerCase()) ? '' : countryText]
+    .filter(Boolean).join(', ') || countryGroup(p) || 'Location TBC'
+
+  return (
+    <article
+      className={[
+        'card',
+        `card--${slug(priority)}`,
+        isNew ? 'is-new' : '',
+        isSelected ? 'is-selected' : '',
+      ].filter(Boolean).join(' ')}
+      style={{ '--priority-color': PRIORITY_COLORS[priority] } as React.CSSProperties}
+    >
+      <button className="card-hit" onClick={onOpen} aria-label={`Open ${p.company} — ${p.specific_role}`} />
+
+      <header className="card-head">
+        <div className="card-title">
+          <h3>{p.company}</h3>
+          <p>{p.specific_role}</p>
+        </div>
+        <ScoreDial score={score} />
+      </header>
+
+      <div className="card-tags">
+        <Pill tone={PRIORITY_COLORS[priority]}>{PRIORITY_LABELS[priority]}</Pill>
+        <Pill tone={STATUS_COLORS[p.application_status]}>{p.application_status}</Pill>
+        <Pill>{p.opportunity_type}</Pill>
+        {p.app_status !== 'Not Applied' && <Pill tone="#38bdf8">{p.app_status}</Pill>}
+      </div>
+
+      <dl className="card-facts">
+        <div><dt>Location</dt><dd>{location}</dd></div>
+        <div><dt>Sector</dt><dd>{sectorGroup(p)}</dd></div>
+        <div><dt>Duration</dt><dd>{orDash(p.placement_duration)}</dd></div>
+        <div><dt>Salary</dt><dd>{orDash(p.salary)}</dd></div>
+        <div>
+          <dt>Opens</dt>
+          <dd>{formatDate(p.exact_opening_date) ?? orDash(p.exact_opening_date)}</dd>
+        </div>
+        <div className={urgent ? 'is-urgent' : undefined}>
+          <dt>Deadline</dt>
+          <dd>
+            {formatDate(p.exact_deadline) ?? orDash(p.exact_deadline)}
+            {deadlineIn !== null && <em> · {relativeDays(deadlineIn)}</em>}
+          </dd>
+        </div>
+      </dl>
+
+      <div className="card-scores">
+        <span className="mini" title="CV fit"><b>{p.cv_fit ?? '—'}</b> CV fit</span>
+        <span className="mini" title="Best matching domain"><b>{domainRelevance(p) || '—'}</b> domain</span>
+        <span className="mini" title="Career value"><b>{p.career_value ?? '—'}</b> career</span>
+        <span className="mini" title="Prestige"><b>{p.prestige ?? '—'}</b> prestige</span>
+      </div>
+
+      <footer className="card-foot">
+        {p.application_link
+          ? <a className="btn btn-primary" href={p.application_link} target="_blank" rel="noopener noreferrer">
+              {p.application_status === 'Open Now' ? 'Apply' : 'View listing'}
+            </a>
+          : <span className="btn btn-disabled">No link</span>}
+        <button className="btn btn-ghost" onClick={onOpen}>Details</button>
+      </footer>
+    </article>
+  )
 }

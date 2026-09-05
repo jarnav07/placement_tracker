@@ -7,44 +7,85 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   realtime: { params: { eventsPerSecond: 10 } },
 })
 
-export type ApplicationStatus = 'Open Now' | 'Opening Soon' | 'Expected' | 'Not Yet Published' | 'Closed'
-export type OverallPriority = 'APPLY_IMMEDIATELY' | 'APPLY_WHEN_OPENING' | 'HIGH_PRIORITY_WATCH' | 'GOOD_BACKUP' | 'LOW_PRIORITY'
-export type AppStatus = 'Not Applied' | 'Saved' | 'Applied' | 'Assessment' | 'Interview' | 'Final Interview' | 'Offer' | 'Accepted' | 'Rejected' | 'Withdrawn'
-export type OpportunityType = 'Industrial Placement' | 'Spring Week / Insight' | 'Internship / Co-op' | 'Other Student Programme'
+/** Public availability of the opportunity itself. Maintained by the audit. */
+export const APPLICATION_STATUSES = [
+  'Open Now', 'Opening Soon', 'Expected', 'Not Yet Published', 'Closed', 'Unknown',
+] as const
+export type ApplicationStatus = (typeof APPLICATION_STATUSES)[number]
 
+/** Derived in Postgres by `placement_priority_band()`. Never written by hand. */
+export const PRIORITIES = [
+  'APPLY_IMMEDIATELY', 'APPLY_WHEN_OPENING', 'HIGH_PRIORITY_WATCH', 'GOOD_BACKUP', 'LOW_PRIORITY',
+] as const
+export type OverallPriority = (typeof PRIORITIES)[number]
+
+/** The user's own progress on an application. Never written by automation. */
+export const APP_STATUSES = [
+  'Not Applied', 'Saved', 'Applied', 'Assessment', 'Interview',
+  'Final Interview', 'Offer', 'Accepted', 'Rejected', 'Withdrawn',
+] as const
+export type AppStatus = (typeof APP_STATUSES)[number]
+
+export const OPPORTUNITY_TYPES = [
+  'Industrial Placement', 'Spring Week / Insight', 'Internship / Co-op', 'Other Student Programme',
+] as const
+export type OpportunityType = (typeof OPPORTUNITY_TYPES)[number]
+
+export const DEADLINE_TYPES = ['Rolling', 'Fixed', 'Vacancy dependent', 'TBC'] as const
+export type DeadlineType = (typeof DEADLINE_TYPES)[number]
+
+/**
+ * Mirrors `public.placements`. Grouped the same way the card is laid out.
+ *
+ * Ownership matters and is enforced by the automation:
+ *   - RESEARCHED fields are written by the audit and may be overwritten at any time.
+ *   - DERIVED fields are computed by a Postgres trigger and must never be written.
+ *   - USER fields are the user's alone and automation must never touch them.
+ */
 export interface Placement {
   id: string
+  created_at: string
+  updated_at: string
+
+  // --- Identity (researched, but never rewritten once tracked) ---
   company: string
+  specific_role: string
+  start_year: number | null
+
+  // --- Classification (researched) ---
   sector: string | null
+  engineering_area: string | null
+  opportunity_type: OpportunityType
   country: string | null
   city: string | null
-  website: string | null
-  careers_page: string | null
-  specific_role: string | null
-  department: string | null
-  engineering_area: string | null
-  opportunity_type: string | null
-  placement_type: string | null
+
+  // --- Programme (researched) ---
   placement_duration: string | null
   placement_start_date: string | null
   placement_end_date: string | null
-  application_status: string | null
+  salary: string | null
+  other_benefits: string | null
+
+  // --- Availability (researched) ---
+  application_status: ApplicationStatus
   exact_opening_date: string | null
   exact_deadline: string | null
-  deadline_type: string | null
-  date_info_verified: string | null
+  deadline_type: DeadlineType | null
+
+  // --- Links (researched) ---
+  website: string | null
+  careers_page: string | null
   application_link: string | null
+
+  // --- Eligibility (researched) ---
   degree_requirements: string | null
   min_grade_requirement: string | null
   year_of_study_requirement: string | null
   required_technical_skills: string | null
-  citizenship_requirement: string | null
-  right_to_work_requirement: string | null
+  work_eligibility: string | null
   security_clearance_requirement: string | null
-  visa_requirement: string | null
-  salary: string | null
-  salary_period: string | null
-  other_benefits: string | null
+
+  // --- Fit scoring, 0-10 (researched) ---
   cv_fit: number | null
   aerospace_relevance: number | null
   rocket_space_relevance: number | null
@@ -54,22 +95,33 @@ export interface Placement {
   controls_avionics_relevance: number | null
   prestige: number | null
   career_value: number | null
-  overall_priority: string | null
   why_it_fits: string | null
   potential_weaknesses: string | null
-  app_status: string | null
+
+  // --- Ranking (DERIVED in Postgres — read-only) ---
+  priority_score: number
+  overall_priority: OverallPriority
+
+  // --- Verification trail (researched) ---
+  source_date_checked: string | null
+  source_verified: string | null
+
+  // --- User-owned ---
+  app_status: AppStatus
   date_applied: string | null
   cv_version: string | null
   cover_letter_required: string | null
   referral_contact: string | null
   interview_date: string | null
-  outcome: string | null
   notes: string | null
-  not_interested: boolean | null
-  source_url: string | null
-  source_type: string | null
-  source_date_checked: string | null
-  source_verified: string | null
-  created_at: string
-  updated_at: string
+  not_interested: boolean
+  archived: boolean
 }
+
+/** Columns the browser is allowed to write. Everything else is read-only here. */
+export const USER_EDITABLE_FIELDS = [
+  'app_status', 'date_applied', 'cv_version', 'cover_letter_required',
+  'referral_contact', 'interview_date', 'notes', 'not_interested', 'archived',
+] as const
+export type UserEditableField = (typeof USER_EDITABLE_FIELDS)[number]
+export type PlacementPatch = Partial<Pick<Placement, UserEditableField>>

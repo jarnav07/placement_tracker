@@ -5,7 +5,8 @@
 // ambiguous. It never deletes rows or recreates Not Interested roles.
 
 import { createClient } from '@supabase/supabase-js'
-import { verifyPlacement, TODAY } from './placement-verifier.mjs'
+import { verifyPlacement, TODAY, TARGET_INTAKE } from './placement-verifier.mjs'
+import { classifyOpportunity, looksLikeStudentRole } from './role-quality.mjs'
 
 const rawSupabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '')
   .trim().replace(/^['"]|['"]$/g, '')
@@ -106,23 +107,25 @@ function roleKey(company, role) {
   return `${norm(company)}|${norm(role)}`
 }
 
-const GENERIC_LINK_RE = /^(apply|apply now|learn more|read more|view details|view jobs|search jobs|careers|join us|click here|more)$/i
-const STUDENT_TERM_RE = /industrial placement|year in industry|placement year|student placement|undergraduate placement|internship|intern\b|co-?op|work placement/i
-const DISCOVERY_TERM_RE = /2027|industrial placement|year in industry|placement|internship|intern\b|co-?op|student|undergraduate/i
-
-function looksLikeRoleLink(link, sourceUrl, pageText) {
-  const label = link.label.trim()
-  if (!label || label.length < 8 || GENERIC_LINK_RE.test(label)) return false
-  if (link.href === sourceUrl) return false
-  if (!DISCOVERY_TERM_RE.test(`${label} ${link.href} ${pageText}`)) return false
-  // A link must carry a meaningful role title; generic navigation links are not candidates.
-  return /engineer|engineering|analyst|scientist|technician|developer|design|manufactur|aero|systems|software|electrical|mechanical|controls|propulsion|performance|intern|placement|student/i.test(label)
+/**
+ * A candidate must look like a student vacancy on the strength of its own link
+ * label and URL.
+ *
+ * The previous version tested the whole SOURCE PAGE text for terms like
+ * "internship" or "2027". Every careers page contains those words somewhere, so
+ * the gate always passed and the crawler inserted product pages, navigation
+ * links and blog posts as if they were vacancies. `looksLikeStudentRole` looks
+ * only at the link itself.
+ */
+function looksLikeRoleLink(link, sourceUrl) {
+  if (!link.href || link.href === sourceUrl) return false
+  return looksLikeStudentRole(link.label, link.href)
 }
 
 async function loadExistingIndex() {
   const { data, error } = await supabase
     .from('placements')
-    .select('id, company, specific_role, city, country, application_link, careers_page, source_url, not_interested')
+    .select('id, company, specific_role, city, country, application_link, careers_page, not_interested, archived')
 
   if (error) throw error
 
@@ -136,7 +139,7 @@ async function loadExistingIndex() {
     byKey.set(key, row)
     if (row.not_interested === true) notInterested.set(key, row)
 
-    for (const value of [row.careers_page, row.application_link, row.source_url]) {
+    for (const value of [row.careers_page, row.application_link]) {
       const url = normaliseUrl(value)
       if (!url) continue
       byUrl.set(url, row)
@@ -148,34 +151,42 @@ async function loadExistingIndex() {
 }
 
 function buildInsert(candidate, result) {
-  const mapped = result.mappedApplicationStatus
+  // Only columns that still exist after the 2026-09-05 schema cleanup, and only
+  // researched ones: `overall_priority` / `priority_score` are derived by a
+  // Postgres trigger and the user-owned tracking columns are left at their
+  // defaults.
   return {
     company: candidate.company,
-    sector: candidate.sector || null,
+    specific_role: candidate.specific_role,
+    start_year: Number(TARGET_INTAKE),
+    opportunity_type: classifyOpportunity(`${candidate.specific_role} ${result.programme_type ?? ''}`),
+    sector: null,
+    engineering_area: null,
     country: result.location_country || candidate.country || null,
     city: result.location_city || candidate.city || null,
     website: result.website || null,
-    careers_page: candidate.careers_page || candidate.application_link || null,
-    specific_role: candidate.specific_role,
-    department: null,
-    engineering_area: null,
-    placement_type: result.placement_type || candidate.placement_type || null,
+    careers_page: candidate.careers_page || null,
+    application_link: result.verified_application_url || candidate.application_link || candidate.careers_page || null,
     placement_duration: result.placement_duration || null,
-    application_status: mapped,
+    application_status: result.mappedApplicationStatus,
     exact_opening_date: result.opening_date || null,
     exact_deadline: result.deadline || null,
-    deadline_type: result.deadline_type || null,
-    date_info_verified: 'Verified ' + TODAY + ' during deterministic source discovery',
-    application_link: result.verified_application_url || candidate.application_link || candidate.careers_page || null,
+    deadline_type: normaliseDeadlineType(result.deadline_type),
     degree_requirements: result.degree_requirements || null,
     salary: result.salary || null,
-    salary_period: null,
-    app_status: 'Not Applied',
-    source_url: candidate.careers_page || candidate.application_link || null,
-    source_type: 'Deterministic source crawl',
     source_date_checked: TODAY,
     source_verified: result.evidence
   }
+}
+
+/** The database CHECKs this column; anything unrecognised becomes null. */
+function normaliseDeadlineType(value) {
+  const text = String(value ?? '').toLowerCase()
+  if (!text) return null
+  if (text.includes('rolling')) return 'Rolling'
+  if (/fixed|window|campaign|wave/.test(text)) return 'Fixed'
+  if (/vacancy|role|programme|program|country/.test(text)) return 'Vacancy dependent'
+  return 'TBC'
 }
 
 async function collectCandidates(sourcePages, byKey, byUrl, notInterested) {
@@ -195,26 +206,19 @@ async function collectCandidates(sourcePages, byKey, byUrl, notInterested) {
     const fetched = await fetchHtml(source.url)
     if (!fetched) continue
 
-    const pageText = extractText(fetched.html)
     for (const link of extractLinks(fetched.html, fetched.url)) {
-      if (!looksLikeRoleLink(link, fetched.url, pageText)) continue
+      if (!looksLikeRoleLink(link, fetched.url)) continue
       const candidateKey = roleKey(source.company, link.label)
       if (seen.has(candidateKey) || byKey.has(candidateKey) || byUrl.has(link.href) || notInterested.has(candidateKey)) continue
-
-      // Only retain links with explicit 2027 or student-placement evidence on the source page/link.
-      const evidenceText = `${pageText} ${link.label} ${link.href}`
-      if (!/\b2027\b/i.test(evidenceText) && !STUDENT_TERM_RE.test(evidenceText)) continue
 
       seen.add(candidateKey)
       candidates.push({
         company: source.company,
-        specific_role: link.label,
+        specific_role: link.label.replace(/\s+/g, ' ').trim(),
         country: source.country || '',
         city: source.city || '',
-        placement_type: STUDENT_TERM_RE.test(evidenceText) ? 'Student placement / internship' : '',
         application_link: link.href,
-        careers_page: fetched.url,
-        source_url: fetched.url
+        careers_page: fetched.url
       })
       if (candidates.length >= MAX_CANDIDATES) return candidates
     }

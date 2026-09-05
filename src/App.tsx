@@ -1,120 +1,448 @@
-import { useEffect, useRef, useState } from 'react'
-import { supabase } from './lib/supabase'
-import type { Placement, OverallPriority, AppStatus } from './lib/supabase'
-import { PRIORITY_LABELS, PRIORITY_COLORS } from './lib/utils'
-import { filterPlacements, normaliseApplicationStatus, sortFilteredPlacements, type SortOption, type SectorGroup, type CountryGroup } from './lib/filtering'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { supabase, PRIORITIES, APP_STATUSES } from './lib/supabase'
+import type { Placement, PlacementPatch, OverallPriority } from './lib/supabase'
+import { PRIORITY_COLORS, PRIORITY_LABELS } from './lib/utils'
+import {
+  EMPTY_FILTERS, countBy, filterPlacements, hasActiveFilters, placementsForView, sortPlacements,
+  type Filters as FilterState, type SortOption, type View,
+} from './lib/filtering'
+import { priorityOf } from './lib/ranking'
 import { downloadExcel } from './lib/excel'
 import PlacementCard from './components/PlacementCard'
+import PlacementDetail from './components/PlacementDetail'
 import MobilePlacementCard from './components/MobilePlacementCard'
+import Filters from './components/Filters'
 import './App.css'
 import './mobile.css'
 
-type FilterPriority = 'all' | OverallPriority
-type View = 'opportunities' | 'applications' | 'not-interested'
-const APP_STAGES: AppStatus[] = ['Saved','Applied','Assessment','Interview','Final Interview','Offer','Accepted','Rejected','Withdrawn']
-const SECTORS: SectorGroup[] = ['Aerospace & Space','Defence','Motorsport','Engineering & Technology','Research & Advanced Tech']
-const COUNTRIES: CountryGroup[] = ['UK','Europe','Asia','Oceania','America']
+/** The pipeline reads left to right, so it is rendered in stage order, not count order. */
+const PIPELINE_STAGES = APP_STATUSES.filter(stage => stage !== 'Not Applied')
+
+const VIEWS: { key: View; label: string; short: string }[] = [
+  { key: 'opportunities', label: 'Opportunities', short: 'Board' },
+  { key: 'applications', label: 'My applications', short: 'Applied' },
+  { key: 'not-interested', label: 'Not interested', short: 'Hidden' },
+  { key: 'archived', label: 'Archived', short: 'Archive' },
+]
 
 export default function App() {
   const [placements, setPlacements] = useState<Placement[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [filterPriority, setFilterPriority] = useState<FilterPriority>('all')
-  const [filterSector, setFilterSector] = useState('all')
-  const [filterCountry, setFilterCountry] = useState('all')
-  const [filterStatus, setFilterStatus] = useState('all')
-  const [filterStage, setFilterStage] = useState('all')
-  const [search, setSearch] = useState('')
-  const [sortBy, setSortBy] = useState<SortOption>('relevance')
-  const [view, setView] = useState<View>('opportunities')
-  const [newIds, setNewIds] = useState<Set<string>>(new Set())
   const [connected, setConnected] = useState(false)
+  const [view, setView] = useState<View>('opportunities')
+  const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS)
+  const [sort, setSort] = useState<SortOption>('priority')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [newIds, setNewIds] = useState<Set<string>>(new Set())
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false)
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
-  const [selectedPlacement, setSelectedPlacement] = useState<Placement | null>(null)
-  const prevIds = useRef<Set<string>>(new Set())
+  const highlightTimers = useRef<number[]>([])
+
+  // --- Data ---------------------------------------------------------------
 
   useEffect(() => {
-    let channel: ReturnType<typeof supabase.channel> | null = null
+    let cancelled = false
+
     async function load() {
-      const { data, error } = await supabase.from('placements').select('*').order('created_at', { ascending: false })
-      if (error) { setError(error.message); setLoading(false); return }
-      const loaded = data as Placement[]
-      setPlacements(loaded); prevIds.current = new Set(loaded.map(p => p.id)); setLoading(false)
+      const { data, error: loadError } = await supabase
+        .from('placements')
+        .select('*')
+        .order('priority_score', { ascending: false })
+      if (cancelled) return
+      if (loadError) { setError(loadError.message); setLoading(false); return }
+      setPlacements((data ?? []) as Placement[])
+      setLoading(false)
     }
-    load()
-    channel = supabase.channel('placements-changes').on('postgres_changes', { event: '*', schema: 'public', table: 'placements' }, payload => {
-      if (payload.eventType === 'INSERT') {
-        const row = payload.new as Placement
-        setPlacements(prev => prev.some(p => p.id === row.id) ? prev : [row, ...prev])
-        setNewIds(prev => new Set(prev).add(row.id))
-        setTimeout(() => setNewIds(prev => { const n = new Set(prev); n.delete(row.id); return n }), 5000)
-      } else if (payload.eventType === 'UPDATE') {
-        const row = payload.new as Placement
-        setPlacements(prev => prev.map(p => p.id === row.id ? row : p))
-        setSelectedPlacement(prev => prev?.id === row.id ? row : prev)
-      } else if (payload.eventType === 'DELETE') {
-        const row = payload.old as Placement
-        setPlacements(prev => prev.filter(p => p.id !== row.id))
-        setSelectedPlacement(prev => prev?.id === row.id ? null : prev)
-      }
-    }).subscribe(status => setConnected(status === 'SUBSCRIBED'))
-    return () => { if (channel) supabase.removeChannel(channel) }
+    void load()
+
+    const channel = supabase
+      .channel('placements-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'placements' }, payload => {
+        if (payload.eventType === 'INSERT') {
+          const row = payload.new as Placement
+          setPlacements(prev => (prev.some(p => p.id === row.id) ? prev : [row, ...prev]))
+          setNewIds(prev => new Set(prev).add(row.id))
+          highlightTimers.current.push(window.setTimeout(
+            () => setNewIds(prev => { const next = new Set(prev); next.delete(row.id); return next }),
+            6000,
+          ))
+        } else if (payload.eventType === 'UPDATE') {
+          const row = payload.new as Placement
+          setPlacements(prev => prev.map(p => (p.id === row.id ? row : p)))
+        } else if (payload.eventType === 'DELETE') {
+          const row = payload.old as Placement
+          setPlacements(prev => prev.filter(p => p.id !== row.id))
+          setSelectedId(prev => (prev === row.id ? null : prev))
+        }
+      })
+      .subscribe(status => setConnected(status === 'SUBSCRIBED'))
+
+    return () => {
+      cancelled = true
+      highlightTimers.current.forEach(window.clearTimeout)
+      void supabase.removeChannel(channel)
+    }
   }, [])
 
-  async function updatePlacement(p: Placement) {
-    const { id, ...rest } = p
-    setPlacements(prev => prev.map(x => x.id === id ? p : x))
-    setSelectedPlacement(prev => prev?.id === id ? p : prev)
-    const { error } = await supabase.from('placements').update(rest).eq('id', id)
-    if (error) setError(`Could not save ${p.company}: ${error.message}`)
-  }
+  /**
+   * The single writer. Only user-owned columns are ever sent, and the derived
+   * ranking columns are re-read from the row the database returns so the UI can
+   * never drift from `placements_apply_ranking()`.
+   */
+  const patchPlacement = useCallback(async (id: string, patch: PlacementPatch) => {
+    setPlacements(prev => prev.map(p => (p.id === id ? { ...p, ...patch } : p)))
+    const { data, error: saveError } = await supabase
+      .from('placements').update(patch).eq('id', id).select().single()
+    if (saveError) {
+      setError(`Could not save: ${saveError.message}`)
+      return
+    }
+    setError(null)
+    if (data) setPlacements(prev => prev.map(p => (p.id === id ? (data as Placement) : p)))
+  }, [])
 
-  const counts = {
-    total: placements.length,
-    open: placements.filter(p => !p.not_interested && normaliseApplicationStatus(p.application_status) === 'Open Now').length,
-    soon: placements.filter(p => !p.not_interested && normaliseApplicationStatus(p.application_status) === 'Opening Soon').length,
-    expected: placements.filter(p => !p.not_interested && normaliseApplicationStatus(p.application_status) === 'Expected').length,
-    applied: placements.filter(p => (p.app_status ?? 'Not Applied') !== 'Not Applied').length,
-    notInterested: placements.filter(p => p.not_interested).length
-  }
-  const priorityCounts: Record<string, number> = { all: placements.filter(p => !p.not_interested).length }
-  for (const key of Object.keys(PRIORITY_LABELS) as OverallPriority[]) priorityCounts[key] = placements.filter(p => !p.not_interested && p.overall_priority === key).length
-  const basePlacements = view === 'not-interested' ? placements.filter(p => p.not_interested) : placements.filter(p => !p.not_interested)
-  const filtered = sortFilteredPlacements(filterPlacements(basePlacements, { priority: filterPriority, sector: filterSector, country: filterCountry, engineeringArea: 'all', status: filterStatus, stage: filterStage, search, applicationsOnly: view === 'applications' }), sortBy)
-  const stageCounts = Object.fromEntries(APP_STAGES.map(s => [s, placements.filter(p => !p.not_interested && (p.app_status ?? 'Not Applied') === s).length])) as Record<string, number>
-  const clearFilters = () => { setFilterPriority('all'); setFilterSector('all'); setFilterCountry('all'); setFilterStatus('all'); setFilterStage('all'); setSearch(''); setSortBy('relevance') }
-  const hasFilters = Boolean(search || filterPriority !== 'all' || filterSector !== 'all' || filterCountry !== 'all' || filterStatus !== 'all' || filterStage !== 'all')
-  const priorityTabs: { key: FilterPriority; label: string; color: string }[] = [
-    { key: 'all', label: 'All', color: '#64748b' },
-    { key: 'APPLY_IMMEDIATELY', label: 'Apply Now', color: PRIORITY_COLORS.APPLY_IMMEDIATELY },
-    { key: 'APPLY_WHEN_OPENING', label: 'Prepare', color: PRIORITY_COLORS.APPLY_WHEN_OPENING },
-    { key: 'HIGH_PRIORITY_WATCH', label: 'High Priority', color: PRIORITY_COLORS.HIGH_PRIORITY_WATCH },
-    { key: 'GOOD_BACKUP', label: 'Backup', color: PRIORITY_COLORS.GOOD_BACKUP },
-    { key: 'LOW_PRIORITY', label: 'Low', color: PRIORITY_COLORS.LOW_PRIORITY }
-  ]
-  const setMobileView = (next: View) => { setView(next); setMobileFiltersOpen(false); setMobileSearchOpen(false) }
+  // --- Derived ------------------------------------------------------------
 
-  return <>
-    <div className="desktop-app app">
-      <header className="app-header"><div className="header-content"><div className="header-top"><div className="brand"><div className="brand-icon">✈</div><div><h1>2027-28 Placement Tracker</h1><p className="brand-sub">Aerospace · Space · Rockets · F1 · {counts.total} opportunities tracked</p></div></div><div className="header-right"><div className={`connection-indicator ${connected ? 'connected' : 'connecting'}`}><span className="conn-dot" />{connected ? 'Live' : 'Connecting…'}</div><button className="download-btn" onClick={() => downloadExcel(placements)}>Download Excel</button></div></div><div className="stats-row"><div className="stat-chip"><span className="stat-num">{counts.total}</span><span className="stat-label">Total</span></div><button className="stat-chip open" onClick={() => { setView('opportunities'); setFilterStatus('Open Now') }}><span className="stat-num">{counts.open}</span><span className="stat-label">Open Now</span></button><button className="stat-chip soon" onClick={() => { setView('opportunities'); setFilterStatus('Opening Soon') }}><span className="stat-num">{counts.soon}</span><span className="stat-label">Open Soon</span></button><div className="stat-chip expected"><span className="stat-num">{counts.expected}</span><span className="stat-label">Expected</span></div><button className="stat-chip applied" onClick={() => setView('applications')}><span className="stat-num">{counts.applied}</span><span className="stat-label">My Applications</span></button></div></div></header>
-      <main className="app-main"><div className="view-switcher"><button className={view === 'opportunities' ? 'active' : ''} onClick={() => setView('opportunities')}>All Opportunities</button><button className={view === 'applications' ? 'active' : ''} onClick={() => setView('applications')}>My Applications <span>{counts.applied}</span></button><button className={view === 'not-interested' ? 'active' : ''} onClick={() => setView('not-interested')}>Not Interested <span>{counts.notInterested}</span></button></div>{view === 'opportunities' && <section className="summary-bar">{priorityTabs.map(tab => <button key={tab.key} className={`summary-tab ${filterPriority === tab.key ? 'active' : ''}`} onClick={() => tab.key === 'all' ? clearFilters() : setFilterPriority(tab.key)}><span className="tab-dot" style={{ background: tab.color }} /><span className="tab-label">{tab.label}</span><span className="tab-count">{priorityCounts[tab.key] ?? 0}</span></button>)}</section>}{view === 'applications' && <section className="pipeline"><div className="pipeline-title"><h2>Application Pipeline</h2><span>{counts.applied} tracked</span></div><div className="pipeline-stages">{APP_STAGES.map(s => <button key={s} className={filterStage === s ? 'active' : ''} onClick={() => setFilterStage(filterStage === s ? 'all' : s)}><strong>{stageCounts[s]}</strong><span>{s}</span></button>)}</div></section>}{view === 'not-interested' && <section className="pipeline"><div className="pipeline-title"><h2>Not Interested</h2><span>{counts.notInterested} hidden from opportunities</span></div></section>}<section className="controls"><div className="search-box"><input type="text" placeholder={view === 'applications' ? 'Search applications, notes, contacts…' : 'Search companies, roles, locations, skills…'} value={search} onChange={e => setSearch(e.target.value)} /></div><div className="filter-selects"><select value={filterPriority} onChange={e => setFilterPriority(e.target.value as FilterPriority)}><option value="all">All Priorities</option>{(Object.keys(PRIORITY_LABELS) as OverallPriority[]).map(k => <option key={k} value={k}>{PRIORITY_LABELS[k]}</option>)}</select><select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}><option value="all">All Statuses</option><option>Open Now</option><option>Opening Soon</option><option>Expected</option><option>Not Yet Published</option><option>Closed</option></select><select value={filterSector} onChange={e => setFilterSector(e.target.value)}><option value="all">All Sectors</option>{SECTORS.map(s => <option key={s}>{s}</option>)}</select><select value={filterCountry} onChange={e => setFilterCountry(e.target.value)}><option value="all">All Locations</option>{COUNTRIES.map(c => <option key={c}>{c}</option>)}</select>{view === 'applications' && <select value={filterStage} onChange={e => setFilterStage(e.target.value)}><option value="all">All My Stages</option>{APP_STAGES.map(s => <option key={s}>{s}</option>)}</select>}<select value={sortBy} onChange={e => setSortBy(e.target.value as SortOption)}><option value="deadline">Sort: Deadline</option><option value="cv_fit">Sort: CV Fit</option><option value="relevance">Sort: Relevance</option><option value="company">Sort: A–Z</option></select><button className="clear-filters" onClick={clearFilters}>Clear</button></div></section><div className="results-summary"><strong>{filtered.length}</strong> {view === 'applications' ? 'applications' : view === 'not-interested' ? 'not-interested roles' : 'opportunities'} shown{hasFilters ? ' with filters' : ''}</div>{error && <div className="save-error">{error}</div>}{loading ? <div className="state-msg"><p>Loading placements…</p></div> : filtered.length === 0 ? <div className="state-msg"><p>{view === 'applications' ? 'No applications match your filters yet.' : view === 'not-interested' ? 'No jobs have been marked as not interested.' : 'No placements match your filters.'}</p><button onClick={clearFilters}>Clear filters</button></div> : <section className="placements-grid">{filtered.map(p => <PlacementCard key={p.id} placement={p} isNew={newIds.has(p.id)} onUpdate={updatePlacement} />)}</section>}</main><footer className="app-footer"><span>{filtered.length} {view === 'applications' ? 'application' : view === 'not-interested' ? 'not-interested role' : 'placement'}{filtered.length === 1 ? '' : 's'}</span><span className="footer-live"><span className="footer-dot" /> Auto-updates when new roles are added or status changes</span></footer>
-    </div>
+  const board = useMemo(() => placementsForView(placements, 'opportunities'), [placements])
 
-    <div className="mobile-app">
-      <header className="mobile-nav-top"><div className="mobile-title-block"><span className="mobile-eyebrow">PLACEMENT TRACKER</span><h1>{view === 'applications' ? 'My Applications' : view === 'not-interested' ? 'Not Interested' : 'Opportunities'}</h1></div><div className="mobile-toolbar"><button className={`mobile-icon-button ${connected ? 'live' : ''}`} aria-label="Realtime connection"><span className="mobile-live-dot" /></button><button className="mobile-icon-button" onClick={() => setMobileSearchOpen(v => !v)} aria-label="Search">⌕</button><button className="mobile-icon-button" onClick={() => downloadExcel(placements)} aria-label="Export placements">⇩</button></div></header>
-      <main className="mobile-main">
-        {view === 'opportunities' && <section className="mobile-hero-stats"><button onClick={() => { setFilterStatus('Open Now'); setView('opportunities') }}><b>{counts.open}</b><span>Open now</span></button><button onClick={() => { setFilterStatus('Opening Soon'); setView('opportunities') }}><b>{counts.soon}</b><span>Opening soon</span></button><button onClick={() => setMobileView('applications')}><b>{counts.applied}</b><span>Applications</span></button></section>}
-        {mobileSearchOpen && <div className="mobile-search"><span>⌕</span><input autoFocus type="text" placeholder="Search placements…" value={search} onChange={e => setSearch(e.target.value)} /><button onClick={() => { setSearch(''); setMobileSearchOpen(false) }}>×</button></div>}
-        {view === 'opportunities' && <div className="mobile-priority-row">{priorityTabs.map(tab => <button key={tab.key} className={filterPriority === tab.key ? 'active' : ''} onClick={() => tab.key === 'all' ? clearFilters() : setFilterPriority(tab.key)}><i style={{ background: tab.color }} />{tab.label}<small>{priorityCounts[tab.key] ?? 0}</small></button>)}</div>}
-        {view === 'applications' && <section className="mobile-pipeline"><div className="mobile-pipeline-title"><b>Application pipeline</b><span>{counts.applied} tracked</span></div><div className="mobile-stage-scroll">{APP_STAGES.map(s => <button key={s} className={filterStage === s ? 'active' : ''} onClick={() => setFilterStage(filterStage === s ? 'all' : s)}><strong>{stageCounts[s]}</strong><small>{s}</small></button>)}</div></section>}
-        <div className="mobile-list-toolbar"><span><b>{filtered.length}</b> {view === 'applications' ? 'applications' : view === 'not-interested' ? 'roles' : 'opportunities'}</span><button className={hasFilters ? 'has-filters' : ''} onClick={() => setMobileFiltersOpen(v => !v)}>☷ Filter{hasFilters ? ' ·' : ''}</button></div>
-        {mobileFiltersOpen && <section className="mobile-filter-panel"><div className="mobile-filter-heading"><b>Filter & Sort</b><button onClick={() => setMobileFiltersOpen(false)}>Done</button></div><label>Priority<select value={filterPriority} onChange={e => setFilterPriority(e.target.value as FilterPriority)}><option value="all">All priorities</option>{(Object.keys(PRIORITY_LABELS) as OverallPriority[]).map(k => <option key={k} value={k}>{PRIORITY_LABELS[k]}</option>)}</select></label><label>Status<select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}><option value="all">All statuses</option><option>Open Now</option><option>Opening Soon</option><option>Expected</option><option>Not Yet Published</option><option>Closed</option></select></label><label>Sector<select value={filterSector} onChange={e => setFilterSector(e.target.value)}><option value="all">All sectors</option>{SECTORS.map(s => <option key={s}>{s}</option>)}</select></label><label>Location<select value={filterCountry} onChange={e => setFilterCountry(e.target.value)}><option value="all">All locations</option>{COUNTRIES.map(c => <option key={c}>{c}</option>)}</select></label>{view === 'applications' && <label>Application stage<select value={filterStage} onChange={e => setFilterStage(e.target.value)}><option value="all">All stages</option>{APP_STAGES.map(s => <option key={s}>{s}</option>)}</select></label>}<label>Sort<select value={sortBy} onChange={e => setSortBy(e.target.value as SortOption)}><option value="relevance">Relevance</option><option value="deadline">Deadline</option><option value="cv_fit">CV fit</option><option value="company">A–Z</option></select></label><button className="mobile-clear" onClick={clearFilters}>Reset all filters</button></section>}
-        {error && <div className="mobile-error">{error}</div>}
-        {loading ? <div className="mobile-empty"><b>Loading placements…</b></div> : filtered.length === 0 ? <div className="mobile-empty"><b>Nothing here yet</b><span>{hasFilters ? 'Try changing your filters.' : 'No placements match this section.'}</span>{hasFilters && <button onClick={clearFilters}>Reset filters</button>}</div> : <section className="mobile-placement-list">{filtered.map(p => <MobilePlacementCard key={p.id} placement={p} onOpen={() => setSelectedPlacement(p)} />)}</section>}
-      </main>
-      <nav className="mobile-tab-bar" aria-label="Main navigation"><button className={view === 'opportunities' ? 'active' : ''} onClick={() => setMobileView('opportunities')}><span>⌂</span><small>Explore</small></button><button className={view === 'applications' ? 'active' : ''} onClick={() => setMobileView('applications')}><span>✓</span><small>Applications</small>{counts.applied > 0 && <em>{counts.applied}</em>}</button><button className={view === 'not-interested' ? 'active' : ''} onClick={() => setMobileView('not-interested')}><span>−</span><small>Not interested</small>{counts.notInterested > 0 && <em>{counts.notInterested}</em>}</button></nav>
-      {selectedPlacement && <div className="mobile-sheet-backdrop" onClick={() => setSelectedPlacement(null)}><section className="mobile-detail-sheet" onClick={e => e.stopPropagation()}><div className="mobile-sheet-grabber" /><div className="mobile-sheet-header"><div><span>PLACEMENT</span><h2>{selectedPlacement.company}</h2></div><button onClick={() => setSelectedPlacement(null)} aria-label="Close details">×</button></div><div className="mobile-sheet-scroll"><PlacementCard placement={selectedPlacement} onUpdate={updatePlacement} defaultExpanded /></div></section></div>}
-    </div>
-  </>
+  const stats = useMemo(() => ({
+    tracked: placements.filter(p => !p.archived).length,
+    board: board.length,
+    open: board.filter(p => p.application_status === 'Open Now').length,
+    soon: board.filter(p => p.application_status === 'Opening Soon').length,
+    applied: placements.filter(p => !p.archived && p.app_status !== 'Not Applied').length,
+    hidden: placements.filter(p => p.not_interested && !p.archived).length,
+    archived: placements.filter(p => p.archived).length,
+  }), [placements, board])
+
+  const priorityCounts = useMemo(() => countBy<OverallPriority>(board, priorityOf), [board])
+  const stageCounts = useMemo(
+    () => countBy(placements.filter(p => !p.archived), p => (p.app_status === 'Not Applied' ? null : p.app_status)),
+    [placements],
+  )
+
+  const visible = useMemo(() => {
+    const scoped = placementsForView(placements, view)
+    return sortPlacements(filterPlacements(scoped, filters), sort)
+  }, [placements, view, filters, sort])
+
+  const selected = useMemo(
+    () => placements.find(p => p.id === selectedId) ?? null,
+    [placements, selectedId],
+  )
+
+  // --- Actions ------------------------------------------------------------
+
+  const updateFilters = useCallback((patch: Partial<FilterState>) => setFilters(prev => ({ ...prev, ...patch })), [])
+  const resetFilters = useCallback(() => { setFilters(EMPTY_FILTERS); setSort('priority') }, [])
+  const filtersActive = hasActiveFilters(filters)
+
+  const changeView = useCallback((next: View) => {
+    setView(next)
+    setSelectedId(null)
+    setMobileFiltersOpen(false)
+    setMobileSearchOpen(false)
+    // Stage only exists inside the applications view; carrying it out is confusing.
+    setFilters(prev => (next === 'applications' ? prev : { ...prev, stage: 'all' }))
+  }, [])
+
+  const jumpTo = useCallback((patch: Partial<FilterState>) => {
+    setView('opportunities')
+    setFilters({ ...EMPTY_FILTERS, ...patch })
+  }, [])
+
+  const patchSelected = useCallback(
+    (patch: PlacementPatch) => { if (selectedId) void patchPlacement(selectedId, patch) },
+    [selectedId, patchPlacement],
+  )
+
+  const emptyMessage = {
+    opportunities: 'No opportunities match these filters.',
+    applications: 'You have not tracked any applications yet.',
+    'not-interested': 'Nothing has been marked as not interested.',
+    archived: 'Nothing has been archived.',
+  }[view]
+
+  const searchPlaceholder = view === 'applications'
+    ? 'Search your applications, notes and contacts…'
+    : 'Search companies, roles, skills, locations…'
+
+  return (
+    <>
+      {/* ---------------------------------------------------------------- */}
+      {/* Desktop                                                          */}
+      {/* ---------------------------------------------------------------- */}
+      <div className="desktop-app">
+        <header className="app-header">
+          <div className="shell header-inner">
+            <div className="brand">
+              <span className="brand-mark" aria-hidden="true">✈</span>
+              <div>
+                <h1>Placement Tracker</h1>
+                <p>2027–28 intake · aerospace, space, motorsport &amp; engineering · {stats.tracked} roles tracked</p>
+              </div>
+            </div>
+            <div className="header-actions">
+              <span className={`live ${connected ? 'is-live' : ''}`}>
+                <i aria-hidden="true" />{connected ? 'Live' : 'Connecting…'}
+              </span>
+              <button className="btn btn-primary" onClick={() => downloadExcel(placements)}>Export Excel</button>
+            </div>
+          </div>
+
+          <div className="shell stat-row">
+            <div className="stat"><b>{stats.board}</b><span>On the board</span></div>
+            <button className="stat stat--open" onClick={() => jumpTo({ status: 'Open Now' })}>
+              <b>{stats.open}</b><span>Open now</span>
+            </button>
+            <button className="stat stat--soon" onClick={() => jumpTo({ status: 'Opening Soon' })}>
+              <b>{stats.soon}</b><span>Opening soon</span>
+            </button>
+            <button className="stat stat--applied" onClick={() => changeView('applications')}>
+              <b>{stats.applied}</b><span>Applications</span>
+            </button>
+            <button className="stat stat--muted" onClick={() => changeView('not-interested')}>
+              <b>{stats.hidden}</b><span>Not interested</span>
+            </button>
+            <button className="stat stat--muted" onClick={() => changeView('archived')}>
+              <b>{stats.archived}</b><span>Archived</span>
+            </button>
+          </div>
+        </header>
+
+        <main className="shell app-main">
+          <nav className="view-tabs" aria-label="Views">
+            {VIEWS.map(item => (
+              <button
+                key={item.key}
+                className={view === item.key ? 'is-active' : ''}
+                onClick={() => changeView(item.key)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+
+          {view === 'opportunities' && (
+            <div className="priority-tabs">
+              <button
+                className={filters.priority === 'all' ? 'is-active' : ''}
+                onClick={() => updateFilters({ priority: 'all' })}
+              >
+                <i style={{ background: '#64748b' }} />All<b>{board.length}</b>
+              </button>
+              {PRIORITIES.map(key => (
+                <button
+                  key={key}
+                  className={filters.priority === key ? 'is-active' : ''}
+                  onClick={() => updateFilters({ priority: filters.priority === key ? 'all' : key })}
+                >
+                  <i style={{ background: PRIORITY_COLORS[key] }} />{PRIORITY_LABELS[key]}<b>{priorityCounts[key] ?? 0}</b>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {view === 'applications' && (
+            <div className="pipeline">
+              {stats.applied === 0
+                ? <p className="pipeline-empty">Open any role and set a stage to start your pipeline.</p>
+                : PIPELINE_STAGES.map(stage => (
+                    <button
+                      key={stage}
+                      className={filters.stage === stage ? 'is-active' : ''}
+                      onClick={() => updateFilters({ stage: filters.stage === stage ? 'all' : stage })}
+                    >
+                      <b>{stageCounts[stage] ?? 0}</b><span>{stage}</span>
+                    </button>
+                  ))}
+            </div>
+          )}
+
+          {view === 'archived' && (
+            <p className="notice">
+              These rows were captured by the crawler but do not look like real vacancies (product pages,
+              navigation links, articles). They are kept, not deleted — open one and choose
+              <strong> Restore to board</strong> if it belongs back on the board.
+            </p>
+          )}
+
+          <div className="controls">
+            <input
+              className="search"
+              type="search"
+              placeholder={searchPlaceholder}
+              value={filters.search}
+              onChange={e => updateFilters({ search: e.target.value })}
+            />
+            <Filters
+              filters={filters} sort={sort} view={view}
+              onChange={updateFilters} onSort={setSort} onReset={resetFilters} showReset={filtersActive}
+            />
+          </div>
+
+          {error && <p className="alert">{error}</p>}
+
+          <p className="result-count">
+            <strong>{visible.length}</strong> {visible.length === 1 ? 'role' : 'roles'}
+            {filtersActive ? ' matching your filters' : ''}
+          </p>
+
+          {loading
+            ? <p className="empty">Loading placements…</p>
+            : visible.length === 0
+              ? (
+                <div className="empty">
+                  <p>{emptyMessage}</p>
+                  {filtersActive && <button className="btn btn-ghost" onClick={resetFilters}>Reset filters</button>}
+                </div>
+              )
+              : (
+                <div className="card-grid">
+                  {visible.map(p => (
+                    <PlacementCard
+                      key={p.id}
+                      placement={p}
+                      isNew={newIds.has(p.id)}
+                      isSelected={selectedId === p.id}
+                      onOpen={() => setSelectedId(p.id)}
+                    />
+                  ))}
+                </div>
+              )}
+        </main>
+
+        {selected && (
+          <>
+            <div className="drawer-backdrop" onClick={() => setSelectedId(null)} />
+            <aside className="drawer" aria-label={`${selected.company} details`}>
+              <PlacementDetail placement={selected} onPatch={patchSelected} onClose={() => setSelectedId(null)} />
+            </aside>
+          </>
+        )}
+      </div>
+
+      {/* ---------------------------------------------------------------- */}
+      {/* Mobile                                                           */}
+      {/* ---------------------------------------------------------------- */}
+      <div className="mobile-app">
+        <header className="m-top">
+          <div>
+            <span className="m-eyebrow">2027–28 INTAKE</span>
+            <h1>{VIEWS.find(item => item.key === view)?.label}</h1>
+          </div>
+          <div className="m-tools">
+            <button className={`m-icon ${connected ? 'is-live' : ''}`} aria-label="Realtime connection status">
+              <i />
+            </button>
+            <button className="m-icon" onClick={() => setMobileSearchOpen(open => !open)} aria-label="Search">⌕</button>
+            <button className="m-icon" onClick={() => downloadExcel(placements)} aria-label="Export to Excel">⇩</button>
+          </div>
+        </header>
+
+        <main className="m-main">
+          {view === 'opportunities' && (
+            <div className="m-stats">
+              <button onClick={() => jumpTo({ status: 'Open Now' })}><b>{stats.open}</b><span>Open now</span></button>
+              <button onClick={() => jumpTo({ status: 'Opening Soon' })}><b>{stats.soon}</b><span>Opening soon</span></button>
+              <button onClick={() => changeView('applications')}><b>{stats.applied}</b><span>Applied</span></button>
+            </div>
+          )}
+
+          {mobileSearchOpen && (
+            <div className="m-search">
+              <span aria-hidden="true">⌕</span>
+              <input
+                autoFocus type="search" placeholder="Search placements…"
+                value={filters.search} onChange={e => updateFilters({ search: e.target.value })}
+              />
+              <button onClick={() => { updateFilters({ search: '' }); setMobileSearchOpen(false) }} aria-label="Clear search">×</button>
+            </div>
+          )}
+
+          {view === 'opportunities' && (
+            <div className="m-priority">
+              <button className={filters.priority === 'all' ? 'is-active' : ''} onClick={() => updateFilters({ priority: 'all' })}>
+                All<small>{board.length}</small>
+              </button>
+              {PRIORITIES.map(key => (
+                <button
+                  key={key}
+                  className={filters.priority === key ? 'is-active' : ''}
+                  onClick={() => updateFilters({ priority: filters.priority === key ? 'all' : key })}
+                >
+                  <i style={{ background: PRIORITY_COLORS[key] }} />{PRIORITY_LABELS[key]}<small>{priorityCounts[key] ?? 0}</small>
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="m-list-bar">
+            <span><b>{visible.length}</b> {visible.length === 1 ? 'role' : 'roles'}</span>
+            <button className={filtersActive ? 'has-filters' : ''} onClick={() => setMobileFiltersOpen(open => !open)}>
+              Filter{filtersActive ? ' ·' : ''}
+            </button>
+          </div>
+
+          {mobileFiltersOpen && (
+            <section className="m-filters">
+              <header>
+                <b>Filter &amp; sort</b>
+                <button onClick={() => setMobileFiltersOpen(false)}>Done</button>
+              </header>
+              <Filters
+                filters={filters} sort={sort} view={view}
+                onChange={updateFilters} onSort={setSort} onReset={resetFilters} showReset={filtersActive}
+              />
+            </section>
+          )}
+
+          {error && <p className="alert">{error}</p>}
+
+          {loading
+            ? <p className="m-empty">Loading placements…</p>
+            : visible.length === 0
+              ? (
+                <div className="m-empty">
+                  <b>Nothing here</b>
+                  <span>{filtersActive ? 'Try changing your filters.' : emptyMessage}</span>
+                  {filtersActive && <button onClick={resetFilters}>Reset filters</button>}
+                </div>
+              )
+              : (
+                <div className="m-list">
+                  {visible.map(p => (
+                    <MobilePlacementCard
+                      key={p.id}
+                      placement={p}
+                      onOpen={() => setSelectedId(p.id)}
+                      onPatch={patch => void patchPlacement(p.id, patch)}
+                    />
+                  ))}
+                </div>
+              )}
+        </main>
+
+        <nav className="m-tabs" aria-label="Main navigation">
+          {VIEWS.map(item => (
+            <button key={item.key} className={view === item.key ? 'is-active' : ''} onClick={() => changeView(item.key)}>
+              <small>{item.short}</small>
+            </button>
+          ))}
+        </nav>
+
+        {selected && (
+          <div className="m-sheet-backdrop" onClick={() => setSelectedId(null)}>
+            <section className="m-sheet" onClick={e => e.stopPropagation()}>
+              <span className="m-grabber" aria-hidden="true" />
+              <div className="m-sheet-scroll">
+                <PlacementDetail placement={selected} onPatch={patchSelected} onClose={() => setSelectedId(null)} />
+              </div>
+            </section>
+          </div>
+        )}
+      </div>
+    </>
+  )
 }
