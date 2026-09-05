@@ -1,12 +1,12 @@
 {
-  "name": "Placement Tracker 27",
+  "name": "Placement Tracker \u00b7 2027\u201328",
   "short_name": "Placement Tracker",
-  "description": "Placement and internship opportunity and application tracker.",
+  "description": "Student placement board for the 2027-28 intake: ranked opportunities, verified availability and application tracking.",
   "start_url": "/placement_tracker/",
   "scope": "/placement_tracker/",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
+  "background_color": "#0a0e16",
+  "theme_color": "#0a0e16",
   "icons": [
     {
       "src": "/placement_tracker/favicon.svg",

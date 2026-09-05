@@ -1,270 +1,276 @@
 # Placement Tracker
 
-A full-stack placement and internship tracking dashboard built with **React, TypeScript, Vite and Supabase**. Placement Tracker helps you discover opportunities, prioritise roles, track applications, and keep your placement search organised in one place.
+A personal board for finding, ranking, verifying and tracking student placements for the
+**2027–28 intake**, aimed at aerospace, space, Formula 1/motorsport and adjacent engineering.
 
-## Features
+React + TypeScript + Vite on the front, Supabase (Postgres) underneath, and a daily GitHub
+Actions job that re-researches every tracked role with Azure OpenAI.
 
-### Opportunity discovery
-- Browse placement and internship opportunities from the central Supabase database.
-- Search by company, role and other placement information.
-- Filter by application status, sector, geography and priority.
-- Sort opportunities by deadline, relevance, CV fit and company name.
-- Track opening dates and deadlines, including roles that are not yet open.
-- Highlight high-value opportunities using CV-fit and relevance scoring.
+---
 
-### Application tracking
-- Track the complete application journey from **Not Applied** through **Saved, Applied, Assessment, Interview, Final Interview, Offer, Accepted, Rejected** and **Withdrawn**.
-- Record application dates, CV versions, cover-letter requirements, referral contacts, interview dates, outcomes and notes.
-- Keep application information attached to the relevant placement rather than maintaining a separate tracker.
+## What the project is for
 
-### Personal organisation
-- Mark roles as **Not Interested** and move them out of the main opportunity view without deleting them.
-- Keep detailed placement information including location, salary, requirements, technical skills, work-authorisation requirements and links.
-- Export placement data for offline analysis or personal records.
+Three jobs, in order of importance:
 
-### Responsive interface
-- Full desktop dashboard for high-information workflows.
-- Dedicated mobile layout designed for touch screens and smaller displays.
-- Shared data and functionality across desktop and mobile.
+1. **Know what is actually open.** A student placement cycle turns over fast, and a role that
+   says "Open Now" when it is not costs a wasted afternoon. Every status must be backed by
+   evidence about *the exact role, for the 2027 intake*.
+2. **Rank hundreds of roles honestly.** With ~380 tracked rows, the board is only useful if
+   the best-matching role is at the top and the ranking is explainable.
+3. **Track applications** without automation ever trampling what the user wrote.
 
-### Live data and automation
-- Supabase provides the application database and realtime updates.
-- Automated role-monitoring scripts can update placement availability.
-- GitHub Actions can run repository automation and deploy the frontend automatically.
-- GitHub Pages hosts the production frontend.
+Everything in the codebase serves one of those three.
 
-## Tech stack
+---
 
-| Technology | Purpose |
-| --- | --- |
-| React | Frontend UI and application state |
-| TypeScript | Type-safe application code |
-| Vite | Development server and production builds |
-| Supabase | PostgreSQL database, API and realtime updates |
-| GitHub Actions | Automation and deployment |
-| GitHub Pages | Static frontend hosting |
-| XLSX | Spreadsheet export |
-
-## Project structure
+## Architecture
 
 ```text
-placement_tracker/
-├── src/
-│   ├── components/       # Reusable UI components
-│   ├── lib/              # Supabase client and shared data logic
-│   ├── App.tsx           # Main application
-│   ├── App.css           # Desktop styling
-│   ├── mobile.css        # Mobile-specific styling
-│   └── index.css         # Global styles
-├── scripts/
-│   ├── role-monitor.mjs  # Placement availability monitoring
-│   └── ...               # Verification and maintenance scripts
-├── .github/workflows/    # GitHub Actions workflows
-├── package.json
-├── vite.config.ts
-└── README.md
+                       ┌─────────────────────────────┐
+   GitHub Actions      │  placement-maintenance.yml  │  16:00 Europe/London, daily
+   (16:00 UK)          └──────────────┬──────────────┘
+                                      │
+                    ┌─────────────────┴─────────────────┐
+                    ▼                                   ▼
+        placement-discovery.mjs                azure-placement-audit.mjs
+        crawls tracked careers pages           re-researches every tracked role
+        role-quality.mjs gates candidates      Azure OpenAI + web search
+        placement-verifier.mjs verifies        writes RESEARCHED columns only
+                    │                                   │
+                    └─────────────────┬─────────────────┘
+                                      ▼
+                            public.placements
+                       (trigger derives the ranking)
+                                      │
+                     Supabase REST + Realtime │
+                                      ▼
+                        React app (desktop + mobile)
 ```
+
+### Files that matter
+
+| Path | Role |
+| --- | --- |
+| `src/lib/supabase.ts` | Client, the `Placement` type, and the **column-ownership rules** |
+| `src/lib/ranking.ts` | TypeScript mirror of the Postgres ranking |
+| `src/lib/filtering.ts` | Views, filters, sorting, sector/region normalisation |
+| `src/lib/excel.ts` | Excel export |
+| `src/App.tsx` | State, realtime, the single write path, desktop + mobile shells |
+| `src/components/PlacementCard.tsx` | Board card — **one card per role** |
+| `src/components/PlacementDetail.tsx` | Full record; the only editable surface |
+| `src/components/MobilePlacementCard.tsx` | Mobile row with swipe actions |
+| `scripts/role-quality.mjs` | The shared "is this actually a vacancy?" rule |
+| `scripts/azure-placement-audit.mjs` | The scheduled verifier |
+| `scripts/placement-discovery.mjs` | Deterministic crawl for new roles |
+| `scripts/check-invariants.mjs` | `npm run check` — guards the rules below |
+| `supabase/migrations/` | Schema, ranking functions, constraints |
+
+---
+
+## Column ownership
+
+This is the rule the project keeps breaking, so it is stated once and enforced by
+`npm run check`:
+
+| Class | Columns | Who writes them |
+| --- | --- | --- |
+| **Identity** | `company`, `specific_role` | Set once at insert. The audit must never rewrite them — a hallucinated rename destroys the row. |
+| **Derived** | `priority_score`, `overall_priority` | A Postgres trigger, on every insert and update. Nothing else. |
+| **User-owned** | `app_status`, `date_applied`, `cv_version`, `cover_letter_required`, `referral_contact`, `interview_date`, `notes`, `not_interested`, `archived` | Only the browser. Automation must never touch them. |
+| **Researched** | everything else | The audit, and only when it actually established a value. |
+
+The browser can only send user-owned columns: `PlacementPatch` is typed as
+`Partial<Pick<Placement, UserEditableField>>`, and `App.tsx` has a single writer.
+
+---
+
+## Ranking
+
+Every role gets a `priority_score` from 0 to 100 and a priority band derived from it. Both
+are computed by `placements_apply_ranking()` in Postgres, so a role is never unranked and no
+agent can invent a new priority vocabulary.
+
+```text
+weighted fit (0–80) = 8 × ( 0.45 × cv_fit
+                          + 0.30 × best domain match
+                          + 0.15 × career_value
+                          + 0.10 × prestige )
+
+availability bonus  = Open Now +18 · Opening Soon +10 · Expected +4 · Closed −40
+opportunity bonus   = Industrial Placement +8 · Internship/Co-op +2
+                    · Spring Week 0 · Other Student Programme −10
+
+priority_score      = clamp(sum, 0, 100)
+```
+
+**Best domain match** is the *maximum* of the six relevance scores, not their average: a pure
+F1 aerodynamics role must not be pushed down the board for scoring zero on rocket/space.
+
+Bands:
+
+| Band | Condition |
+| --- | --- |
+| `APPLY_IMMEDIATELY` | score ≥ 75 **and** Open Now |
+| `APPLY_WHEN_OPENING` | score ≥ 58 **and** Opening Soon / Expected |
+| `HIGH_PRIORITY_WATCH` | score ≥ 58 |
+| `GOOD_BACKUP` | score ≥ 42 |
+| `LOW_PRIORITY` | otherwise, and always when Closed |
+
+`src/lib/ranking.ts` mirrors this so the card can show **why** a role ranks where it does.
+`npm run check` fails if the two implementations drift apart.
+
+---
+
+## Status semantics
+
+| Status | Meaning |
+| --- | --- |
+| `Open Now` | The exact 2027 role is accepting applications today, with a confirmed application route. |
+| `Opening Soon` | 2027 intake confirmed, published opening date not yet reached. |
+| `Expected` | 2027 intake confirmed, no opening details published. |
+| `Not Yet Published` | The programme exists; its 2027 intake is not published. |
+| `Closed` | The exact 2027 intake has closed, filled or passed its deadline. |
+| `Unknown` | Evidence insufficient or contradictory. |
+
+Two rules the audit enforces mechanically:
+
+- **A closed 2026 intake never closes the 2027 intake.**
+- **`Open Now` and `Closed` are gated.** They are only written at ≥ 80 % confidence with the
+  exact role found, the 2027 intake confirmed, an official source, and a real application
+  link. Anything weaker becomes `Unknown`.
+- An unresolved run **does not** overwrite a stable status (`Expected`, `Not Yet Published`,
+  `Opening Soon`), but it **does** clear a stale `Open Now` or `Closed` — those make the user
+  act, so leaving one standing without evidence is worse than admitting uncertainty.
+
+---
+
+## Views
+
+| View | Shows |
+| --- | --- |
+| Opportunities | Everything not archived and not marked Not Interested |
+| My applications | Anything with a stage past *Not Applied* |
+| Not interested | Roles the user rejected — hidden, never deleted |
+| Archived | Links the crawler mistook for vacancies — hidden, never deleted, restorable |
+
+**No view collapses roles by company.** One company can run several distinct placements and
+each carries its own fit, deadline and rank.
+
+---
+
+## Discovery
+
+`placement-discovery.mjs` crawls careers pages already present in the tracker and extracts
+candidate links. A candidate must pass `looksLikeStudentRole()` in `scripts/role-quality.mjs`
+on the strength of **its own label and URL** — not the page it was found on. That distinction
+matters: every careers page contains the word "internship" somewhere, so testing the page
+text let product pages ("Propulsion systems"), navigation links ("View all placements") and
+blog posts ("Why be an engineer at Babcock?") into the database as if they were vacancies.
+
+The same rule backs the `archived` flag, so the crawler and the database agree on what a role is.
+
+Candidates are then verified, and only inserted with a confirmed 2027 intake, an exact role
+match and a usable link. Discovery never deletes a row and never re-creates a Not Interested one.
+
+---
 
 ## Getting started
 
-### Prerequisites
-
-- Node.js 20+ (Node.js 22 is recommended for the current GitHub Actions workflow)
-- npm
-- A Supabase project
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/jarnav07/placement_tracker.git
-cd placement_tracker
-```
-
-### 2. Install dependencies
-
 ```bash
 npm install
-```
-
-### 3. Configure Supabase
-
-Create a local `.env` file in the project root:
-
-```env
-VITE_SUPABASE_URL=https://YOUR_PROJECT_ID.supabase.co
-VITE_SUPABASE_ANON_KEY=YOUR_ANON_OR_PUBLISHABLE_KEY
-```
-
-`VITE_SUPABASE_URL` must be the **Supabase project URL**. Do not use the REST endpoint ending in `/rest/v1/`.
-
-For the browser application, use the Supabase **anon/publishable** key. Never expose a `service_role` key through a `VITE_*` variable or client-side code.
-
-> `.env` files containing real credentials should never be committed to the repository.
-
-### 4. Start the development server
-
-```bash
+cp .env.example .env      # fill in VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY
 npm run dev
 ```
 
-Vite will provide a local development URL in the terminal.
-
-### 5. Create a production build
-
-```bash
-npm run build
-```
-
-To preview the production build locally:
-
-```bash
-npm run preview
-```
-
-## Supabase
-
-The frontend connects to Supabase through `src/lib/supabase.ts`. The browser client uses the public project URL and anon/publishable key, while privileged automation should use protected GitHub Actions secrets rather than frontend environment variables.
-
-The database stores placement information and application-tracking fields, including:
-
-- Placement status and opening/deadline information
-- Company, role, sector and location
-- Salary and benefits
-- Degree and eligibility requirements
-- CV-fit and relevance scores
-- Application stage and dates
-- CV and cover-letter information
-- Referrals, interviews, outcomes and notes
-- Not-interested state
-
-Database security should be enforced with Supabase Row Level Security (RLS) policies appropriate to the deployment.
-
-## Automated maintenance (discovery + audit)
-
-A GitHub Actions workflow (`.github/workflows/placement-maintenance.yml`) runs **twice a day** (09:30 and 18:00 UK time) and can also be triggered manually from the Actions tab.
-
-Every audit row runs deterministic page/job-board verification first. Azure OpenAI is escalated to **only** when the deterministic layer cannot reach a confident answer **and** it actually gathered page/board evidence to reason over — it is never called for every row, and never called when nothing was fetchable. Groq and OpenAI are disabled in the maintenance workflow.
-
-- **Deterministic first (no AI credits).** The audit fetches tracked links, follows "Apply" buttons to external job boards (Greenhouse, Lever, Ashby, SmartRecruiters, Workday), and applies conservative evidence-gated rules.
-- **Azure OpenAI escalation.** The workflow sets `USE_AZURE=true` and provides the Azure deployment only for uncertain deterministic results. Use a deployment such as `gpt-4.1-mini` from Azure AI Foundry (via the Azure OpenAI v1 API, which no longer uses a dated `api-version`).
-- **Deterministic discovery.** The discovery step crawls official career/source pages already present in the tracker, extracts explicit student-role links, and verifies each candidate with deterministic evidence first and Azure only when needed. It does not use web-search AI or Groq.
-- **Final fallback.** If Azure is unavailable or fails, the best safe deterministic result is retained; rows are never deleted or guessed.
-- **Optional providers.** The scripts still support Groq/OpenAI for manual experiments, but the scheduled maintenance workflow explicitly disables them.
-
-Each run:
-
-1. **Discover** (`npm run discover`, `scripts/placement-discovery.mjs`) — deterministically crawls official career/source pages already tracked, extracts explicit student-role links, verifies candidates for the **2027-start** intake, and inserts only confirmed valid entries. Azure is used only when deterministic evidence is insufficient.
-2. **Audit** (`npm run audit`, `scripts/placement-audit.mjs`) — re-verifies **every** placement row and updates `application_status` (and, when verified, opening date, deadline and link) so cards reflect the latest availability.
-
-### Verification safety rules
-
-- Only placements that **start in 2027** are tracked. A closed **2026** intake is never treated as a closed **2027** intake.
-- A role is only added or flipped to **Open Now** when the exact student role and the 2027 intake are verified. In deterministic mode this means strong, explicit page signals (2027 + student terms + the exact role + an apply/open signal).
-- **Job-board verification.** When a tracked page's "Apply" button points to an external job board (Greenhouse, Lever, Ashby, SmartRecruiters, Workday), the audit follows it and queries the board's public API.
-  - A live board match alone is **not** enough: the audit then reads the posting's own page and only flips to **Open Now** when the **2027 intake** and **student status** are both confirmed (a 2026 posting, a graduate scheme, or an unconfirmed intake stays unchanged). The direct posting URL replaces the generic link only in that confirmed case.
-  - A card is moved to **Closed** only when the board was **fully enumerated**, the role was previously **Open Now**, and the role is absent with no even-loose title match. Absence on an incomplete board (e.g. Workday's truncated listing) never closes a role.
-  - Boards that cannot be queried reliably are ignored (no assertion).
-- Unverifiable roles are left unchanged or marked **Not Yet Published** / **Expected** rather than guessed (AI mode).
-- The audit **never deletes rows** and **never touches** your application-tracking fields (`app_status`, dates, CV version, referral, interview, outcome, notes, Not Interested).
-
-### Required GitHub Actions secrets
-
-| Secret / variable | Purpose |
+| Command | What it does |
 | --- | --- |
-| `SUPABASE_URL` (or `VITE_SUPABASE_URL`) | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Privileged Supabase access for the automation |
-| `AZURE_OPENAI_API_KEY` (required for scheduled AI escalation) | Azure OpenAI API key — enables Azure escalation for uncertain deterministic results |
-| `AZURE_OPENAI_ENDPOINT` (required for Azure escalation) | Azure OpenAI endpoint, e.g. `https://your-resource.openai.azure.com` |
-| `AZURE_OPENAI_DEPLOYMENT_NAME` (required for Azure escalation) | Your Azure deployment name, e.g. `gpt-4.1-mini` |
-| `USE_AZURE` (repository variable, optional) | Defaults to `true` in the workflow; set to `false` to disable the Azure AI audit |
-| `GROQ_API_KEY` (not used by scheduled workflow) | Only needed for optional manual Groq experiments |
-| `USE_GROQ` (not used by scheduled workflow) | The maintenance workflow sets this to `false` directly |
-| `OPENAI_API_KEY` (optional) | Only needed when `USE_OPENAI=true` (AI discovery) |
-| `USE_OPENAI` (not used by scheduled workflow) | The maintenance workflow sets this to `false` directly |
+| `npm run dev` | Vite dev server |
+| `npm run build` | Type-check and build for production |
+| `npm run preview` | Serve the production build |
+| `npm run check` | Verify the invariants above (offline, no credentials) |
+| `npm run discover` | Crawl tracked careers pages for new 2027 roles |
+| `npm run audit:azure` | Re-verify and enrich every tracked role (scheduled job) |
+| `npm run audit` | Deterministic, no-AI availability check |
+| `npm run monitor` | Read-only report of tracked links that no longer resolve |
 
-Optional models: `GROQ_MODEL` (defaults to `llama-3.3-70b-versatile`), `OPENAI_MODEL` (defaults to `gpt-4o-mini`). **Do not put `SUPABASE_SERVICE_ROLE_KEY`, `GROQ_API_KEY`, `AZURE_OPENAI_API_KEY`, or `OPENAI_API_KEY` into the frontend or any `VITE_*` variable.**
+### Database
 
-### Recommended one-time setup: automated backups
+Apply `supabase/migrations/` in order. The current schema is defined by:
 
-Before each audit the script calls a backup function if it exists. Apply `supabase/migrations/20260818000000_create_placements_backup.sql` in the Supabase SQL editor once to enable automatic point-in-time backups (`placements_backup_YYYY_MM_DD_HH24_MI_SS`).
+- `20260811130410_create_placements_table.sql` — the original table
+- `20260813100000_add_not_interested.sql`
+- `20260818000000_create_placements_backup.sql`
+- `20260901120000_add_opportunity_type_for_spring_weeks.sql`
+- `20260905120000_schema_cleanup_and_ranking.sql` — **the current shape**: removes ten
+  redundant columns, adds `work_eligibility` / `priority_score` / `archived`, normalises every
+  vocabulary, installs the ranking trigger and the CHECK constraints
 
-### Legacy scripts
+---
 
-`npm run monitor` (`scripts/role-monitor.mjs`) remains a read-only link-reachability check. The older `job-discovery.mjs`, `gradcracker-discovery.mjs`, `reliable-role-verification.mjs` and `ai-role-status.mjs` scripts are superseded by the new pipeline and are not used by the workflow.
+## Scheduled maintenance
 
-## GitHub Pages deployment
+`.github/workflows/placement-maintenance.yml` runs at **16:00 Europe/London** every day.
+GitHub cron is UTC-only, so it fires at 15:00 and 16:00 UTC and a gate job keeps whichever
+invocation is 16:00 in London. **Manual runs are never gated** — `workflow_dispatch` always
+proceeds, and takes inputs:
 
-The production frontend is deployed automatically through GitHub Actions.
-
-The deployment flow is:
-
-```text
-Push to main
-    ↓
-GitHub Actions
-    ↓
-npm ci
-    ↓
-npm run build
-    ↓
-Upload Vite dist/ artifact
-    ↓
-GitHub Pages
-```
-
-For the GitHub Actions deployment to access Supabase during the Vite build, configure these repository secrets under **Settings → Secrets and variables → Actions**:
-
-```text
-VITE_SUPABASE_URL
-VITE_SUPABASE_ANON_KEY
-```
-
-Any privileged automation should use separate non-`VITE_` secrets such as `SUPABASE_SERVICE_ROLE_KEY`.
-
-## Development workflow
-
-The project is designed to work with both local development and Bolt.
-
-Recommended workflow:
-
-1. Make changes in Bolt or locally.
-2. Test the application locally where practical.
-3. Commit changes to `main`.
-4. GitHub Actions builds and deploys the production site.
-5. Verify the deployment after the workflow completes.
-
-When changing the UI, preserve the shared application logic and Supabase data model. Mobile-specific presentation can be modified independently of the desktop presentation.
-
-## Security notes
-
-- Never commit `.env` files containing real credentials.
-- Never expose a Supabase `service_role` key in browser code.
-- Only public/anon or publishable Supabase credentials should be used in `VITE_*` variables.
-- Treat GitHub Actions secrets as sensitive credentials.
-- Keep database access protected by appropriate Supabase RLS policies.
-
-## Available npm scripts
-
-| Command | Description |
+| Input | Purpose |
 | --- | --- |
-| `npm run dev` | Start the Vite development server |
-| `npm run build` | Type-check and create the production build |
-| `npm run preview` | Preview the production build locally |
-| `npm run monitor` | Run the read-only placement link monitor |
-| `npm run discover` | Discover and verify new 2027 student placements |
-| `npm run audit` | Re-verify every placement and update availability |
-| `npm run verify-tracking-features` | Verify protected application/location tracking functionality |
+| `steps` | `discover-and-audit` (default), `audit-only`, `discover-only` |
+| `limit` | Verify at most N roles, least recently verified first |
+| `only_stale_days` | Only verify roles not checked in the last N days |
+| `include_not_interested` | Also verify rejected roles |
 
-## Contributing
+The audit skips archived rows and (by default) Not Interested rows, retries Azure on 429/5xx
+with backoff, records a failure in `source_verified` while leaving the row's data intact, and
+fails the job only when more than a quarter of verifications fail — which means credentials
+or the deployment name are wrong, not that a few sites timed out.
 
-For changes to the tracker:
+### Required secrets
 
-1. Create a focused change rather than modifying unrelated functionality.
-2. Preserve existing application-tracking and location-tracking behaviour.
-3. Test both desktop and mobile layouts for UI changes.
-4. Run `npm run build` before committing where possible.
-5. Keep credentials and private configuration out of Git.
+| Secret | Used by |
+| --- | --- |
+| `SUPABASE_URL` (or `VITE_SUPABASE_URL`) | discovery + audit |
+| `SUPABASE_SERVICE_ROLE_KEY` | discovery + audit |
+| `AZURE_OPENAI_ENDPOINT` | audit |
+| `AZURE_OPENAI_API_KEY` | audit |
+| `AZURE_OPENAI_DEPLOYMENT_NAME` | audit (e.g. `gpt-4.1-mini`) |
+| `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | the Pages build |
 
-## License
+The workflow fails fast with a named list if any are missing.
 
-This repository is currently maintained as a personal project. No open-source license has been specified.
+---
+
+## Deployment
+
+`.github/workflows/deploy-pages.yml` builds and publishes to GitHub Pages on every push to
+`main`. `.github/workflows/ci.yml` runs `npm run check` and `npm run build` on pushes and
+pull requests.
+
+---
+
+## Security
+
+- Never commit `.env`. Only `VITE_*` variables reach the browser, and they must be the
+  anon/publishable key.
+- `SUPABASE_SERVICE_ROLE_KEY` and `AZURE_OPENAI_API_KEY` belong in GitHub Actions secrets only.
+- `public.placements` has RLS enabled with permissive single-tenant policies.
+
+> **Backup snapshots.** The `create_placements_backup` RPC has produced 27
+> `placements_backup_*` tables (~18 MB). Those created from 2026-08-20 onward had **RLS
+> disabled**, meaning anyone with the public anon key could read or modify a full copy of the
+> tracker. `20260905130000_harden_placements_backup.sql` fixes this: every future snapshot is
+> created with RLS enabled and anon/authenticated privileges revoked, and the same has been
+> applied to the existing ones. They are now reachable only by the service role.
+>
+> The snapshots themselves are kept — they are backups, and dropping them is your call:
+>
+> ```sql
+> SELECT tablename,
+>        pg_size_pretty(pg_total_relation_size(format('public.%I', tablename))) AS size
+> FROM pg_tables
+> WHERE schemaname = 'public' AND tablename LIKE 'placements_backup%'
+> ORDER BY tablename;
+>
+> DROP TABLE public.placements_backup_2026_08_20_09_18_46;   -- one at a time, deliberately
+> ```

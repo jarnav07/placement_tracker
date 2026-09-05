@@ -1,0 +1,104 @@
+/* Full record for one role. Used by the desktop drawer and the mobile sheet. */
+
+.detail { display: flex; flex-direction: column; gap: 22px; padding: 22px 24px 40px; }
+
+.detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.detail-eyebrow { color: var(--text-faint); font-size: 0.64rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.detail-head h2 { margin-top: 6px; font-size: 1.35rem; overflow-wrap: anywhere; }
+.detail-head > div > p { margin-top: 4px; color: var(--text-dim); font-size: 0.88rem; overflow-wrap: anywhere; }
+.detail-tags { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; }
+
+.detail-head-right { display: flex; align-items: flex-start; gap: 10px; }
+.detail-close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-dim);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+.detail-close:hover { background: var(--surface-2); color: var(--text); }
+
+.detail-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.detail-section { display: flex; flex-direction: column; gap: 12px; }
+.detail-section h4 {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.field-list { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; }
+.field dt { color: var(--text-faint); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
+.field dd { margin-top: 3px; font-size: 0.82rem; line-height: 1.5; overflow-wrap: anywhere; }
+.field a { color: var(--accent); }
+
+.tracking-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.tracking-grid label,
+.tracking-notes { display: flex; flex-direction: column; gap: 5px; color: var(--text-faint); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
+.tracking-grid input,
+.tracking-grid select,
+.tracking-notes textarea {
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  outline: none;
+  font-size: 0.83rem;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.tracking-notes textarea { resize: vertical; line-height: 1.5; }
+.tracking-grid input:focus,
+.tracking-grid select:focus,
+.tracking-notes textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.score-breakdown { display: grid; gap: 4px; list-style: none; }
+.score-breakdown li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 10px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-size: 0.76rem;
+}
+.score-breakdown span { color: var(--text-dim); }
+.score-breakdown b { font-variant-numeric: tabular-nums; }
+
+.score-bars { display: grid; gap: 7px; margin-top: 6px; }
+
+.detail-prose { color: var(--text-dim); font-size: 0.83rem; line-height: 1.6; }
+.detail-prose strong { color: var(--text); }
+
+.detail-meta { color: var(--text-dim); font-size: 0.8rem; }
+.detail-evidence {
+  max-height: 240px;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+@media (max-width: 560px) {
+  .detail { padding: 18px 16px 32px; gap: 18px; }
+  .field-list,
+  .tracking-grid { grid-template-columns: 1fr; }
+  .detail-head h2 { font-size: 1.15rem; }
+}

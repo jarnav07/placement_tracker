@@ -1,14 +1,16 @@
 import { useRef, useState } from 'react'
-import type { Placement, OverallPriority, AppStatus } from '../lib/supabase'
-import { supabase } from '../lib/supabase'
-import { PRIORITY_LABELS, PRIORITY_COLORS, scoreBarColor } from '../lib/utils'
+import type { Placement, PlacementPatch } from '../lib/supabase'
+import { PRIORITY_COLORS, PRIORITY_LABELS, STATUS_COLORS, orDash, relativeDays, formatDate } from '../lib/utils'
+import { priorityOf, priorityScoreOf } from '../lib/ranking'
+import { daysUntil } from '../lib/filtering'
+import { scoreColor } from '../lib/utils'
 import './MobilePlacementCard.css'
 
 interface Props {
   placement: Placement
   onOpen: () => void
-  onSwipeLeft?: () => void
-  onSwipeRight?: () => void
+  /** Swipe actions go through the app's single writer, so state stays in sync. */
+  onPatch: (patch: PlacementPatch) => void
 }
 
 const SWIPE_THRESHOLD = 80
@@ -16,11 +18,12 @@ const MAX_SWIPE = 120
 const SWIPE_SNAP_DURATION = 180
 const DIRECTION_LOCK_DISTANCE = 8
 
-export default function MobilePlacementCard({ placement: p, onOpen, onSwipeLeft, onSwipeRight }: Props) {
-  const priority = (p.overall_priority ?? 'LOW_PRIORITY') as OverallPriority
-  const priorityLabel = PRIORITY_LABELS[priority]
-  const appStage = p.app_status && p.app_status !== 'Not Applied' ? p.app_status : null
-  const status = p.application_status ?? 'TBC'
+export default function MobilePlacementCard({ placement: p, onOpen, onPatch }: Props) {
+  const priority = priorityOf(p)
+  const score = priorityScoreOf(p)
+  const stage = p.app_status !== 'Not Applied' ? p.app_status : null
+  const deadlineIn = daysUntil(p.exact_deadline)
+
   const cardRef = useRef<HTMLButtonElement>(null)
   const pointerStart = useRef<{ x: number; y: number } | null>(null)
   const activePointerId = useRef<number | null>(null)
@@ -28,7 +31,6 @@ export default function MobilePlacementCard({ placement: p, onOpen, onSwipeLeft,
   const swipeX = useRef(0)
   const didSwipe = useRef(false)
   const hapticTriggered = useRef(false)
-  const swipeBusy = useRef(false)
   const animationFrame = useRef<number | null>(null)
   const resetTimer = useRef<number | null>(null)
   const [swipeSide, setSwipeSide] = useState<'left' | 'right' | null>(null)
@@ -36,16 +38,13 @@ export default function MobilePlacementCard({ placement: p, onOpen, onSwipeLeft,
   const applySwipeVisual = (x: number, animate = false) => {
     const card = cardRef.current
     if (!card) return
-
     if (animationFrame.current !== null) {
       cancelAnimationFrame(animationFrame.current)
       animationFrame.current = null
     }
-
     const clamped = Math.max(-MAX_SWIPE, Math.min(MAX_SWIPE, x))
     swipeX.current = clamped
     card.classList.toggle('is-dragging', !animate)
-
     animationFrame.current = requestAnimationFrame(() => {
       const rotation = Math.max(-4, Math.min(4, clamped * 0.028))
       const scale = 1 - Math.min(Math.abs(clamped) / MAX_SWIPE, 1) * 0.012
@@ -62,9 +61,11 @@ export default function MobilePlacementCard({ placement: p, onOpen, onSwipeLeft,
     swipeX.current = 0
   }
 
+  /** A short low tone as the swipe crosses its commit threshold. Purely optional. */
   const triggerClick = () => {
     try {
-      const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      const AudioContextClass = window.AudioContext
+        || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
       if (!AudioContextClass) return
       const context = new AudioContextClass()
       const oscillator = context.createOscillator()
@@ -82,32 +83,19 @@ export default function MobilePlacementCard({ placement: p, onOpen, onSwipeLeft,
       oscillator.stop(now + 0.03)
       window.setTimeout(() => void context.close(), 100)
     } catch {
-      // Optional feedback must never interfere with the gesture.
+      // Feedback must never interfere with the gesture.
     }
   }
 
-  const updateSwipe = async (changes: Partial<Placement>) => {
-    swipeBusy.current = true
-    const { error } = await supabase.from('placements').update(changes).eq('id', p.id)
-    swipeBusy.current = false
-    if (error) console.error(`Could not save ${p.company} swipe action:`, error)
-  }
-
-  const handleSwipeLeft = () => {
-    if (onSwipeLeft) onSwipeLeft()
-    else void updateSwipe({ not_interested: !p.not_interested })
-  }
-
-  const handleSwipeRight = () => {
-    if (onSwipeRight) {
-      onSwipeRight()
+  const commitSwipe = (direction: 'left' | 'right') => {
+    if (direction === 'left') {
+      onPatch({ not_interested: !p.not_interested })
       return
     }
-
-    const currentlyApplied = (p.app_status ?? 'Not Applied') !== 'Not Applied'
-    void updateSwipe({
-      app_status: (currentlyApplied ? 'Not Applied' : 'Applied') as AppStatus,
-      date_applied: currentlyApplied ? null : (p.date_applied ?? new Date().toISOString().slice(0, 10)),
+    const applied = p.app_status !== 'Not Applied'
+    onPatch({
+      app_status: applied ? 'Not Applied' : 'Applied',
+      date_applied: applied ? null : (p.date_applied ?? new Date().toISOString().slice(0, 10)),
     })
   }
 
@@ -129,20 +117,17 @@ export default function MobilePlacementCard({ placement: p, onOpen, onSwipeLeft,
     applySwipeVisual(dx > 0 ? 18 : -18, true)
     resetTimer.current = window.setTimeout(() => {
       resetSwipeVisual()
-      if (dx < 0) handleSwipeLeft()
-      else handleSwipeRight()
+      commitSwipe(dx < 0 ? 'left' : 'right')
     }, SWIPE_SNAP_DURATION)
-
     window.setTimeout(() => { didSwipe.current = false }, SWIPE_SNAP_DURATION)
   }
 
   const handlePointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
-    if (swipeBusy.current || activePointerId.current !== null) return
+    if (activePointerId.current !== null) return
     if (resetTimer.current !== null) {
       window.clearTimeout(resetTimer.current)
       resetTimer.current = null
     }
-
     activePointerId.current = e.pointerId
     pointerStart.current = { x: e.clientX, y: e.clientY }
     gestureAxis.current = null
@@ -150,19 +135,12 @@ export default function MobilePlacementCard({ placement: p, onOpen, onSwipeLeft,
     didSwipe.current = false
     hapticTriggered.current = false
     setSwipeSide(null)
-
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId)
-    } catch {
-      // Pointer capture is an enhancement.
-    }
-
+    try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* enhancement only */ }
     cardRef.current?.classList.add('is-dragging')
   }
 
   const handlePointerMove = (e: React.PointerEvent<HTMLButtonElement>) => {
-    if (!pointerStart.current || activePointerId.current !== e.pointerId || swipeBusy.current) return
-
+    if (!pointerStart.current || activePointerId.current !== e.pointerId) return
     const dx = e.clientX - pointerStart.current.x
     const dy = e.clientY - pointerStart.current.y
 
@@ -170,44 +148,33 @@ export default function MobilePlacementCard({ placement: p, onOpen, onSwipeLeft,
       if (Math.max(Math.abs(dx), Math.abs(dy)) < DIRECTION_LOCK_DISTANCE) return
       gestureAxis.current = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical'
     }
-
     if (gestureAxis.current === 'vertical') return
 
     e.preventDefault()
     didSwipe.current = true
-
-    if (Math.abs(dx) >= 35) {
-      const nextSide = dx < 0 ? 'left' : 'right'
-      setSwipeSide((current) => current === nextSide ? current : nextSide)
-    } else {
-      setSwipeSide(null)
-    }
-
+    setSwipeSide(Math.abs(dx) >= 35 ? (dx < 0 ? 'left' : 'right') : null)
     if (Math.abs(dx) >= SWIPE_THRESHOLD && !hapticTriggered.current) {
       hapticTriggered.current = true
       triggerClick()
     }
-
     applySwipeVisual(dx)
+  }
+
+  const releasePointer = (e: React.PointerEvent<HTMLButtonElement>) => {
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch { /* browsers without pointer capture */ }
   }
 
   const handlePointerUp = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (activePointerId.current !== e.pointerId || !pointerStart.current) return
-    try {
-      if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
-    } catch {
-      // Ignore browsers without pointer capture support.
-    }
+    releasePointer(e)
     finishSwipe()
   }
 
   const handlePointerCancel = (e: React.PointerEvent<HTMLButtonElement>) => {
     if (activePointerId.current !== e.pointerId || !pointerStart.current) return
-    try {
-      if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
-    } catch {
-      // Ignore browsers without pointer capture support.
-    }
+    releasePointer(e)
     pointerStart.current = null
     activePointerId.current = null
     gestureAxis.current = null
@@ -218,55 +185,50 @@ export default function MobilePlacementCard({ placement: p, onOpen, onSwipeLeft,
     didSwipe.current = false
   }
 
-  const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-    if (didSwipe.current) {
-      e.preventDefault()
-      e.stopPropagation()
-      return
-    }
-    onOpen()
-  }
-
   const swipeLabel = swipeSide === 'left'
-    ? (p.not_interested ? 'Back to opportunities' : 'Not interested')
+    ? (p.not_interested ? 'Back to board' : 'Not interested')
     : swipeSide === 'right'
-      ? (appStage ? 'Unapply' : 'Apply')
+      ? (stage ? 'Un-apply' : 'Mark applied')
       : null
 
   return (
     <button
       ref={cardRef}
-      className="mobile-placement-card"
-      onClick={handleClick}
+      className="mpc"
+      style={{ '--priority-color': PRIORITY_COLORS[priority] } as React.CSSProperties}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerCancel}
-      aria-label={`Open ${p.company} placement details`}
+      onClick={event => {
+        // A completed swipe must not also count as a tap.
+        if (didSwipe.current) { event.preventDefault(); event.stopPropagation(); return }
+        onOpen()
+      }}
+      aria-label={`Open ${p.company} — ${p.specific_role}`}
     >
-      {swipeLabel && <span className={`mpc-swipe-label ${swipeSide === 'left' ? 'left' : 'right'}`}>{swipeLabel}</span>}
-      <div className="mpc-topline">
-        <span className="mpc-company">{p.company}</span>
-        <span className="mpc-score" style={{ color: scoreBarColor(p.cv_fit ?? 0) }}>{p.cv_fit ?? '?'}</span>
-      </div>
-      <div className="mpc-role">{p.specific_role ?? 'Role TBC'}</div>
-
-      <div className="mpc-badges">
-        <span className="mpc-badge priority" style={{ '--badge-color': PRIORITY_COLORS[priority] } as React.CSSProperties}>{priorityLabel}</span>
-        <span className="mpc-badge status">{status}</span>
-        {appStage && <span className="mpc-badge stage">{appStage}</span>}
-      </div>
-
-      <div className="mpc-info">
-        <span>{p.city ?? p.country ?? 'Location TBC'}</span>
-        <span>{p.exact_deadline ?? 'Deadline TBC'}</span>
-        <span>{p.salary ?? 'Salary TBC'}</span>
-      </div>
-
-      <div className="mpc-footer">
-        <span className="mpc-sector">{p.sector ?? 'Engineering'}</span>
-        <span className="mpc-details">Details <span aria-hidden="true">›</span></span>
-      </div>
+      {swipeLabel && <span className={`mpc-swipe ${swipeSide}`}>{swipeLabel}</span>}
+      <span className="mpc-body">
+        <span className="mpc-top">
+          <span className="mpc-company">{p.company}</span>
+          <span className="mpc-score" style={{ color: scoreColor(score / 10) }}>{score}</span>
+        </span>
+        <span className="mpc-role">{p.specific_role}</span>
+        <span className="mpc-tags">
+          <span className="mpc-tag" style={{ '--pill-accent': PRIORITY_COLORS[priority] } as React.CSSProperties}>
+            {PRIORITY_LABELS[priority]}
+          </span>
+          <span className="mpc-tag" style={{ '--pill-accent': STATUS_COLORS[p.application_status] } as React.CSSProperties}>
+            {p.application_status}
+          </span>
+          {stage && <span className="mpc-tag" style={{ '--pill-accent': '#38bdf8' } as React.CSSProperties}>{stage}</span>}
+        </span>
+        <span className="mpc-meta">
+          <span>{p.city ?? p.country ?? 'Location TBC'}</span>
+          <span>{formatDate(p.exact_deadline) ?? orDash(p.exact_deadline, 'Deadline TBC')}</span>
+          <span>{deadlineIn !== null ? relativeDays(deadlineIn) : orDash(p.salary, 'Salary TBC')}</span>
+        </span>
+      </span>
     </button>
   )
 }

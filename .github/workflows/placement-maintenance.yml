@@ -2,76 +2,118 @@ name: Placement Maintenance
 
 on:
   schedule:
-    # GitHub cron is UTC and does not support IANA time zones directly.
-    # Run at both 15:00 and 16:00 UTC, then allow only the invocation whose
-    # Europe/London local time is exactly 16:00. This keeps the effective
-    # schedule at 4:00 PM UK time across BST/GMT transitions.
+    # GitHub cron is UTC only. Firing at both 15:00 and 16:00 UTC and letting the
+    # job decide keeps the effective schedule at 16:00 Europe/London across the
+    # BST/GMT changeover.
     - cron: '0 15 * * *'
     - cron: '0 16 * * *'
   workflow_dispatch:
-
-env:
-  RUN_MAINTENANCE: 'false'
+    inputs:
+      steps:
+        description: Which steps to run
+        type: choice
+        default: discover-and-audit
+        options: [discover-and-audit, audit-only, discover-only]
+      limit:
+        description: 'Verify at most N roles (0 = all). Least recently verified first.'
+        type: string
+        default: '0'
+      only_stale_days:
+        description: 'Only verify roles not checked in the last N days (0 = all).'
+        type: string
+        default: '0'
+      include_not_interested:
+        description: Also verify roles marked Not Interested
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
   group: placement-maintenance
-  # Never cancel a run in progress: an interrupted audit must not leave a half-updated board.
+  # An interrupted audit must not leave the board half-updated.
   cancel-in-progress: false
 
 jobs:
-  maintain:
+  gate:
+    # The schedule fires twice; only the 16:00 Europe/London invocation should do
+    # work. A manual run is ALWAYS honoured — the previous version applied the
+    # clock gate to workflow_dispatch too, so manual runs silently did nothing
+    # unless they happened to be started at exactly 4 PM UK.
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
     steps:
-      - name: Determine 4 PM UK invocation
+      - id: decide
         run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Manual run — proceeding."
+            exit 0
+          fi
           UK_TIME="$(TZ=Europe/London date +%H:%M)"
           if [ "$UK_TIME" = "16:00" ]; then
-            echo "RUN_MAINTENANCE=true" >> "$GITHUB_ENV"
-            echo "Proceeding at $(TZ=Europe/London date '+%Y-%m-%d %H:%M %Z') Europe/London."
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Proceeding at $(TZ=Europe/London date '+%Y-%m-%d %H:%M %Z')."
           else
-            echo "RUN_MAINTENANCE=false" >> "$GITHUB_ENV"
-            echo "Skipping non-4 PM UK trigger at $(TZ=Europe/London date '+%Y-%m-%d %H:%M %Z') Europe/London."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping non-4 PM UK trigger at $(TZ=Europe/London date '+%Y-%m-%d %H:%M %Z')."
           fi
 
-      - name: Checkout
-        if: env.RUN_MAINTENANCE == 'true'
-        uses: actions/checkout@v4
+  maintain:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
 
-      - name: Set up Node.js
-        if: env.RUN_MAINTENANCE == 'true'
-        uses: actions/setup-node@v4
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+      AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
+      STEPS: ${{ inputs.steps || 'discover-and-audit' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      - name: Install dependencies
-        if: env.RUN_MAINTENANCE == 'true'
-        run: npm ci
+      - run: npm ci
 
+      - name: Check required secrets
+        run: |
+          missing=""
+          for name in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY AZURE_OPENAI_API_KEY AZURE_OPENAI_ENDPOINT AZURE_OPENAI_DEPLOYMENT_NAME; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            exit 1
+          fi
+
+      # Deterministic crawl of career pages already tracked. Only links whose own
+      # label and URL read as a student vacancy become candidates, and each one is
+      # verified before it is inserted.
       - name: Discover new 2027 placements
-        if: env.RUN_MAINTENANCE == 'true'
+        if: env.STEPS != 'audit-only'
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          USE_GROQ: 'false'
           USE_AZURE: 'true'
-          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
-          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
-          AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
+          USE_GROQ: 'false'
           USE_OPENAI: 'false'
         run: npm run discover
 
-      - name: Azure-only verification of every placement
-        if: env.RUN_MAINTENANCE == 'true'
+      # Azure OpenAI re-researches each tracked role and writes back the
+      # researched columns. Identity, derived ranking and user-owned tracking
+      # columns are never written.
+      - name: Verify and enrich every tracked placement
+        if: env.STEPS != 'discover-only'
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
-          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
-          AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
+          AUDIT_LIMIT: ${{ inputs.limit || '0' }}
+          AUDIT_ONLY_STALE_DAYS: ${{ inputs.only_stale_days || '0' }}
+          AUDIT_INCLUDE_NOT_INTERESTED: ${{ inputs.include_not_interested || 'false' }}
         run: npm run audit:azure

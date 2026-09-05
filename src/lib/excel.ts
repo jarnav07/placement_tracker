@@ -1,153 +1,139 @@
 import * as XLSX from 'xlsx'
-import type { Placement, OverallPriority } from './supabase'
-import { PRIORITY_LABELS, PRIORITY_ORDER, sortPlacements } from './utils'
+import type { Placement } from './supabase'
+import { PRIORITY_LONG_LABELS } from './utils'
+import { priorityOf, priorityScoreOf, domainRelevance } from './ranking'
+import { SECTOR_GROUPS, sectorGroup, sortPlacements, type SectorGroup } from './filtering'
 
-const COLUMN_HEADERS = [
-  'Company', 'Sector', 'Country', 'City / Location', 'Website', 'Careers Page',
-  'Specific Role', 'Department', 'Engineering Area', 'Opportunity Type', 'Placement Type', 'Placement Duration',
-  'Placement Start Date', 'Placement End Date',
-  'Application Status', 'Exact Opening Date', 'Exact Deadline', 'Deadline Type', 'Date Info Verified', 'Application Link',
-  'Degree Requirements', 'Min Grade Requirement', 'Year of Study Requirement', 'Required Technical Skills',
-  'Citizenship Requirement', 'Right to Work Requirement', 'Security Clearance Requirement', 'Visa Requirement',
-  'Salary', 'Salary Period', 'Other Benefits',
-  'CV Fit /10', 'Aerospace Relevance /10', 'Rocket/Space Relevance /10', 'F1/Motorsport Relevance /10',
-  'Aerodynamics/CFD Relevance /10', 'Propulsion Relevance /10', 'Controls/Avionics Relevance /10',
-  'Prestige /10', 'Career Value /10', 'Overall Priority', 'Why It Fits My CV', 'Potential Weaknesses',
-  'Application Status (Tracking)', 'Date Applied', 'CV Version', 'Cover Letter Required?', 'Referral/Contact',
-  'Interview Date', 'Outcome', 'Notes',
-  'Source URL', 'Source Type', 'Date Checked', 'What Was Verified',
+const COLUMNS: { header: string; value: (p: Placement) => string | number }[] = [
+  { header: 'Rank score /100', value: p => priorityScoreOf(p) },
+  { header: 'Overall priority', value: p => PRIORITY_LONG_LABELS[priorityOf(p)] },
+  { header: 'Company', value: p => p.company },
+  { header: 'Specific role', value: p => p.specific_role },
+  { header: 'Opportunity type', value: p => p.opportunity_type },
+  { header: 'Application status', value: p => p.application_status },
+  { header: 'Sector group', value: p => sectorGroup(p) },
+  { header: 'Engineering area', value: p => p.engineering_area ?? '' },
+  { header: 'City', value: p => p.city ?? '' },
+  { header: 'Country', value: p => p.country ?? '' },
+  { header: 'Start year', value: p => p.start_year ?? '' },
+  { header: 'Opening date', value: p => p.exact_opening_date ?? '' },
+  { header: 'Deadline', value: p => p.exact_deadline ?? '' },
+  { header: 'Deadline type', value: p => p.deadline_type ?? '' },
+  { header: 'Duration', value: p => p.placement_duration ?? '' },
+  { header: 'Placement start', value: p => p.placement_start_date ?? '' },
+  { header: 'Placement end', value: p => p.placement_end_date ?? '' },
+  { header: 'Salary', value: p => p.salary ?? '' },
+  { header: 'Other benefits', value: p => p.other_benefits ?? '' },
+  { header: 'CV fit /10', value: p => p.cv_fit ?? '' },
+  { header: 'Best domain match /10', value: p => domainRelevance(p) },
+  { header: 'Aerospace /10', value: p => p.aerospace_relevance ?? '' },
+  { header: 'Rocket & space /10', value: p => p.rocket_space_relevance ?? '' },
+  { header: 'F1 & motorsport /10', value: p => p.f1_motorsport_relevance ?? '' },
+  { header: 'Aero & CFD /10', value: p => p.aero_cfd_relevance ?? '' },
+  { header: 'Propulsion /10', value: p => p.propulsion_relevance ?? '' },
+  { header: 'Controls & avionics /10', value: p => p.controls_avionics_relevance ?? '' },
+  { header: 'Prestige /10', value: p => p.prestige ?? '' },
+  { header: 'Career value /10', value: p => p.career_value ?? '' },
+  { header: 'Why it fits', value: p => p.why_it_fits ?? '' },
+  { header: 'Potential weaknesses', value: p => p.potential_weaknesses ?? '' },
+  { header: 'Degree requirements', value: p => p.degree_requirements ?? '' },
+  { header: 'Minimum grade', value: p => p.min_grade_requirement ?? '' },
+  { header: 'Year of study', value: p => p.year_of_study_requirement ?? '' },
+  { header: 'Technical skills', value: p => p.required_technical_skills ?? '' },
+  { header: 'Work eligibility', value: p => p.work_eligibility ?? '' },
+  { header: 'Security clearance', value: p => p.security_clearance_requirement ?? '' },
+  { header: 'Application link', value: p => p.application_link ?? '' },
+  { header: 'Careers page', value: p => p.careers_page ?? '' },
+  { header: 'Website', value: p => p.website ?? '' },
+  { header: 'My stage', value: p => p.app_status },
+  { header: 'Date applied', value: p => p.date_applied ?? '' },
+  { header: 'CV version', value: p => p.cv_version ?? '' },
+  { header: 'Cover letter', value: p => p.cover_letter_required ?? '' },
+  { header: 'Referral / contact', value: p => p.referral_contact ?? '' },
+  { header: 'Interview date', value: p => p.interview_date ?? '' },
+  { header: 'My notes', value: p => p.notes ?? '' },
+  { header: 'Not interested', value: p => (p.not_interested ? 'Yes' : '') },
+  { header: 'Last verified', value: p => p.source_date_checked ?? '' },
+  { header: 'Verification evidence', value: p => p.source_verified ?? '' },
 ]
 
-function placementToRow(p: Placement): (string | number)[] {
-  return [
-    p.company, p.sector ?? '', p.country ?? '', p.city ?? '', p.website ?? '', p.careers_page ?? '',
-    p.specific_role ?? '', p.department ?? '', p.engineering_area ?? '', p.opportunity_type ?? '', p.placement_type ?? '', p.placement_duration ?? '',
-    p.placement_start_date ?? '', p.placement_end_date ?? '',
-    p.application_status ?? '', p.exact_opening_date ?? '', p.exact_deadline ?? '', p.deadline_type ?? '', p.date_info_verified ?? '', p.application_link ?? '',
-    p.degree_requirements ?? '', p.min_grade_requirement ?? '', p.year_of_study_requirement ?? '', p.required_technical_skills ?? '',
-    p.citizenship_requirement ?? '', p.right_to_work_requirement ?? '', p.security_clearance_requirement ?? '', p.visa_requirement ?? '',
-    p.salary ?? '', p.salary_period ?? '', p.other_benefits ?? '',
-    p.cv_fit ?? '', p.aerospace_relevance ?? '', p.rocket_space_relevance ?? '', p.f1_motorsport_relevance ?? '',
-    p.aero_cfd_relevance ?? '', p.propulsion_relevance ?? '', p.controls_avionics_relevance ?? '',
-    p.prestige ?? '', p.career_value ?? '',
-    p.overall_priority ? PRIORITY_LABELS[p.overall_priority as OverallPriority] : '',
-    p.why_it_fits ?? '', p.potential_weaknesses ?? '',
-    p.app_status ?? '', p.date_applied ?? '', p.cv_version ?? '', p.cover_letter_required ?? '', p.referral_contact ?? '',
-    p.interview_date ?? '', p.outcome ?? '', p.notes ?? '',
-    p.source_url ?? '', p.source_type ?? '', p.source_date_checked ?? '', p.source_verified ?? '',
-  ]
-}
+const HEADERS = COLUMNS.map(column => column.header)
 
-function autoWidth(ws: XLSX.WorkSheet, headers: string[]) {
-  const colWidths = headers.map((h) => ({ wch: Math.max(h.length + 2, 12) }))
-  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
-  for (let r = 1; r <= range.e.r; r++) {
-    for (let c = 0; c <= range.e.c; c++) {
-      const cell = ws[XLSX.utils.encode_cell({ r, c })]
-      if (cell && cell.v != null) {
-        const len = String(cell.v).length
-        if (len + 2 > colWidths[c]?.wch) colWidths[c].wch = Math.min(len + 2, 60)
-      }
+function autoWidth(sheet: XLSX.WorkSheet, headers: string[]) {
+  const widths = headers.map(header => ({ wch: Math.max(header.length + 2, 12) }))
+  const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1')
+  for (let row = 1; row <= range.e.r; row++) {
+    for (let col = 0; col <= range.e.c; col++) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: row, c: col })]
+      if (cell?.v == null || !widths[col]) continue
+      widths[col].wch = Math.min(Math.max(widths[col].wch, String(cell.v).length + 2), 60)
     }
   }
-  ws['!cols'] = colWidths
+  sheet['!cols'] = widths
 }
 
-function buildMasterSheet(placements: Placement[]): XLSX.WorkSheet {
-  const sorted = sortPlacements(placements)
-  const rows = sorted.map(placementToRow)
-  const ws = XLSX.utils.aoa_to_sheet([COLUMN_HEADERS, ...rows])
-  ws['!freeze'] = { xSplit: 0, ySplit: 1 }
-  ws['!autofilter'] = { ref: `A1:${XLSX.utils.encode_cell({ r: 0, c: COLUMN_HEADERS.length - 1 })}` }
-  autoWidth(ws, COLUMN_HEADERS)
-  return ws
+function sheetFrom(headers: string[], rows: (string | number)[][]): XLSX.WorkSheet {
+  const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows])
+  sheet['!freeze'] = { xSplit: 0, ySplit: 1 }
+  sheet['!autofilter'] = { ref: `A1:${XLSX.utils.encode_cell({ r: 0, c: headers.length - 1 })}` }
+  autoWidth(sheet, headers)
+  return sheet
 }
 
-function buildApplyNowSheet(placements: Placement[]): XLSX.WorkSheet {
-  const filtered = sortPlacements(placements.filter((p) => p.application_status === 'Open Now'))
-  const rows = filtered.map(placementToRow)
-  const ws = XLSX.utils.aoa_to_sheet([COLUMN_HEADERS, ...rows])
-  ws['!freeze'] = { xSplit: 0, ySplit: 1 }
-  autoWidth(ws, COLUMN_HEADERS)
-  return ws
+function fullSheet(placements: Placement[]): XLSX.WorkSheet {
+  const ranked = sortPlacements(placements, 'priority')
+  return sheetFrom(HEADERS, ranked.map(p => COLUMNS.map(column => column.value(p))))
 }
 
-function buildOpeningSoonSheet(placements: Placement[]): XLSX.WorkSheet {
-  const filtered = placements
-    .filter((p) => p.application_status === 'Opening Soon')
-    .sort((a, b) => (a.exact_opening_date ?? 'zzz').localeCompare(b.exact_opening_date ?? 'zzz'))
-  const rows = filtered.map(placementToRow)
-  const ws = XLSX.utils.aoa_to_sheet([COLUMN_HEADERS, ...rows])
-  ws['!freeze'] = { xSplit: 0, ySplit: 1 }
-  autoWidth(ws, COLUMN_HEADERS)
-  return ws
-}
-
-function buildTop25Sheet(placements: Placement[]): XLSX.WorkSheet {
-  const sorted = sortPlacements(placements).slice(0, 25)
-  const headers = ['Rank', 'Company', 'Opportunity Type', 'Sector', 'Role', 'CV Fit /10', 'Overall Priority', 'Application Status', 'Why It Fits']
-  const rows = sorted.map((p, i) => [
-    i + 1, p.company, p.opportunity_type ?? '', p.sector ?? '', p.specific_role ?? '', p.cv_fit ?? '',
-    p.overall_priority ? PRIORITY_LABELS[p.overall_priority as OverallPriority] : '',
-    p.application_status ?? '', p.why_it_fits ?? '',
+function shortlistSheet(placements: Placement[]): XLSX.WorkSheet {
+  const headers = ['Rank', 'Score /100', 'Priority', 'Company', 'Role', 'Type', 'Status', 'Deadline', 'CV fit', 'Why it fits', 'Apply']
+  const rows = sortPlacements(placements, 'priority').slice(0, 40).map((p, index) => [
+    index + 1, priorityScoreOf(p), PRIORITY_LONG_LABELS[priorityOf(p)], p.company, p.specific_role,
+    p.opportunity_type, p.application_status, p.exact_deadline ?? '', p.cv_fit ?? '',
+    p.why_it_fits ?? '', p.application_link ?? '',
   ])
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
-  ws['!freeze'] = { xSplit: 0, ySplit: 1 }
-  autoWidth(ws, headers)
-  return ws
+  return sheetFrom(headers, rows)
 }
 
-function buildSectorSheet(placements: Placement[], sector: string): XLSX.WorkSheet {
-  const filtered = sortPlacements(placements.filter((p) => p.sector === sector))
-  const rows = filtered.map(placementToRow)
-  const ws = XLSX.utils.aoa_to_sheet([COLUMN_HEADERS, ...rows])
-  ws['!freeze'] = { xSplit: 0, ySplit: 1 }
-  autoWidth(ws, COLUMN_HEADERS)
-  return ws
-}
-
-function buildAppTrackerSheet(placements: Placement[]): XLSX.WorkSheet {
-  const headers = ['Company', 'Role', 'Opportunity Type', 'Deadline', 'Priority', 'Applied?', 'Date Applied', 'Interview?', 'Offer?', 'Rejected?', 'Notes']
-  const sorted = sortPlacements(placements)
-  const rows = sorted.map((p) => [
-    p.company, p.specific_role ?? '', p.opportunity_type ?? '', p.exact_deadline ?? '',
-    p.overall_priority ? PRIORITY_LABELS[p.overall_priority as OverallPriority] : '',
-    p.app_status ?? 'Not Applied', p.date_applied ?? '',
-    p.app_status === 'Interview' ? 'Yes' : '', p.app_status === 'Offer' ? 'Yes' : '',
-    p.app_status === 'Rejected' ? 'Yes' : '', p.notes ?? '',
+function pipelineSheet(placements: Placement[]): XLSX.WorkSheet {
+  const headers = ['Company', 'Role', 'Stage', 'Date applied', 'Interview date', 'CV version', 'Cover letter', 'Referral', 'Deadline', 'Notes']
+  const rows = sortPlacements(placements.filter(p => p.app_status !== 'Not Applied'), 'deadline').map(p => [
+    p.company, p.specific_role, p.app_status, p.date_applied ?? '', p.interview_date ?? '',
+    p.cv_version ?? '', p.cover_letter_required ?? '', p.referral_contact ?? '', p.exact_deadline ?? '', p.notes ?? '',
   ])
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
-  ws['!freeze'] = { xSplit: 0, ySplit: 1 }
-  autoWidth(ws, headers)
-  return ws
+  return sheetFrom(headers, rows)
 }
 
-function buildSourcesSheet(placements: Placement[]): XLSX.WorkSheet {
-  const headers = ['Company', 'Opportunity Type', 'Source URL', 'Source Type', 'Date Checked', 'What Was Verified']
-  const sorted = sortPlacements(placements)
-  const rows = sorted.map((p) => [
-    p.company, p.opportunity_type ?? '', p.source_url ?? '', p.source_type ?? '', p.source_date_checked ?? '', p.source_verified ?? '',
-  ])
-  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
-  ws['!freeze'] = { xSplit: 0, ySplit: 1 }
-  autoWidth(ws, headers)
-  return ws
+function sectorSheet(placements: Placement[], sector: SectorGroup): XLSX.WorkSheet {
+  // Filters on the DERIVED sector group, not the raw column: the raw values are
+  // employer free text and would leave most of these sheets empty.
+  return fullSheet(placements.filter(p => sectorGroup(p) === sector))
+}
+
+const SHEET_NAMES: Record<SectorGroup, string> = {
+  'Aerospace & Space': 'Aerospace & Space',
+  'Defence': 'Defence',
+  'Motorsport': 'Motorsport',
+  'Engineering & Technology': 'Engineering & Tech',
+  'Research & Advanced Tech': 'Research',
 }
 
 export function downloadExcel(placements: Placement[]) {
-  const wb = XLSX.utils.book_new()
+  // The export mirrors the board: archived scrape artefacts are excluded,
+  // Not Interested roles are kept but flagged in their own column.
+  const tracked = placements.filter(p => !p.archived)
+  const active = tracked.filter(p => !p.not_interested)
+  const workbook = XLSX.utils.book_new()
 
-  XLSX.utils.book_append_sheet(wb, buildMasterSheet(placements), 'MASTER TRACKER')
-  XLSX.utils.book_append_sheet(wb, buildApplyNowSheet(placements), 'APPLY NOW')
-  XLSX.utils.book_append_sheet(wb, buildOpeningSoonSheet(placements), 'OPENING SOON')
-  XLSX.utils.book_append_sheet(wb, buildTop25Sheet(placements), 'TOP 25')
-  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'Motorsport'), 'MOTORSPORT')
-  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'Aerospace & Space'), 'AEROSPACE & SPACE')
-  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'Defence'), 'DEFENCE')
-  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'Engineering & Technology'), 'ENGINEERING & TECHNOLOGY')
-  XLSX.utils.book_append_sheet(wb, buildSectorSheet(placements, 'Research & Advanced Tech'), 'RESEARCH & ADVANCED TECH')
-  XLSX.utils.book_append_sheet(wb, buildAppTrackerSheet(placements), 'APPLICATION TRACKER')
-  XLSX.utils.book_append_sheet(wb, buildSourcesSheet(placements), 'SOURCES')
+  XLSX.utils.book_append_sheet(workbook, shortlistSheet(active), 'Top 40')
+  XLSX.utils.book_append_sheet(workbook, fullSheet(tracked), 'All roles')
+  XLSX.utils.book_append_sheet(workbook, fullSheet(active.filter(p => p.application_status === 'Open Now')), 'Open now')
+  XLSX.utils.book_append_sheet(workbook, fullSheet(active.filter(p => p.application_status === 'Opening Soon')), 'Opening soon')
+  XLSX.utils.book_append_sheet(workbook, pipelineSheet(tracked), 'My pipeline')
+  for (const sector of SECTOR_GROUPS) {
+    XLSX.utils.book_append_sheet(workbook, sectorSheet(active, sector), SHEET_NAMES[sector])
+  }
 
-  XLSX.writeFile(wb, '2027_Aerospace_Space_F1_Industrial_Placement_Tracker.xlsx')
+  const stamp = new Date().toISOString().slice(0, 10)
+  XLSX.writeFile(workbook, `placement-tracker-2027-${stamp}.xlsx`)
 }

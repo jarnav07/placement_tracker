@@ -1,5 +1,5 @@
 {
-  "name": "live-roles-board",
+  "name": "placement-tracker",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -7,11 +7,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
+    "check": "node scripts/check-invariants.mjs",
     "monitor": "node scripts/role-monitor.mjs",
     "discover": "node scripts/placement-discovery.mjs",
     "audit": "node scripts/placement-audit.mjs",
-    "audit:azure": "node scripts/azure-placement-audit.mjs",
-    "verify-tracking-features": "node scripts/verify-tracking-features-v2.mjs"
+    "audit:azure": "node scripts/azure-placement-audit.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
@@ -25,5 +25,6 @@
     "@vitejs/plugin-react": "^4.3.1",
     "typescript": "^5.5.3",
     "vite": "^5.4.1"
-  }
+  },
+  "description": "2027-28 student placement tracker: discovery, evidence-backed verification, ranking and application tracking."
 }

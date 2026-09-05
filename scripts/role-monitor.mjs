@@ -1,29 +1,100 @@
+// Read-only link monitor. Reports tracked URLs that no longer resolve.
+//
+// It writes NOTHING. An earlier version stamped its findings into `notes` and
+// `source_verified`, which silently overwrote the user's own notes on 179 rows
+// and made an unreachable URL look like a verification result. Availability is
+// decided only by the audit; a 404 here is a prompt to look, not a status.
+//
+//   npm run monitor
+
 import { createClient } from '@supabase/supabase-js'
 
-const rawSupabaseUrl=process.env.SUPABASE_URL?.trim().replace(/^['"]|['"]$/g,'')
-const supabaseKey=process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^['"]|['"]$/g,'')
-if(!rawSupabaseUrl||!supabaseKey){console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY GitHub Actions secrets.');process.exit(1)}
-const supabaseUrl=new URL(rawSupabaseUrl);supabaseUrl.pathname='';supabaseUrl.search='';supabaseUrl.hash=''
-const supabase=createClient(supabaseUrl.toString().replace(/\/$/,''),supabaseKey,{auth:{persistSession:false,autoRefreshToken:false},realtime:{enabled:false}})
-const today=new Date().toISOString().slice(0,10),timeoutMs=15000
-function normaliseUrl(value){if(!value)return null;try{return new URL(value).toString()}catch{return null}}
-async function checkUrl(url){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeoutMs);try{let r;try{r=await fetch(url,{method:'HEAD',redirect:'follow',signal:controller.signal,headers:{'User-Agent':'placement-tracker-role-monitor/2.0'}})}catch{r=await fetch(url,{method:'GET',redirect:'follow',signal:controller.signal,headers:{'User-Agent':'placement-tracker-role-monitor/2.0'}})}return{ok:r.ok,status:r.status,finalUrl:r.url}}catch(error){return{ok:false,status:null,finalUrl:url,error:error?.message??'Unknown error'}}finally{clearTimeout(timer)}}
-function protectedTrackingStatus(status){const s=String(status??'').trim().toLowerCase();return ['applied','application submitted','interview','interviewing','rejected','offer','offered','accepted','withdrawn','not interested'].some(v=>s===v||s.includes(v))}
-async function main(){
-  const{data:placements,error}=await supabase.from('placements').select('id,company,specific_role,application_status,app_status,application_link,careers_page,source_url');if(error)throw error
-  const active=(placements??[]).filter(p=>String(p.app_status??'').trim().toLowerCase()!=='not interested');let checked=0,broken=0,skipped=0
-  console.log(`Link monitor: checking ${active.length} roles. This step NEVER decides whether a placement is open.`)
-  for(const p of active){
-    const candidates=[p.application_link,p.careers_page,p.source_url].map(normaliseUrl).filter(Boolean);if(!candidates.length){skipped++;continue}
-    let result=null,checkedUrl=null
-    for(const url of [...new Set(candidates)]){result=await checkUrl(url);checkedUrl=url;if(result.ok)break}
-    checked++
-    const statusText=result?.ok?`URL reachable (${result.status})`:`URL check failed${result?.status?` (${result.status})`:''}`
-    const updates={source_date_checked:today,source_verified:`Link monitor: ${statusText}; checked ${today}`,updated_at:new Date().toISOString()}
-    if(!result?.ok){broken++;if(!protectedTrackingStatus(p.app_status)&&!protectedTrackingStatus(p.application_status))updates.notes=`Link monitor: tracked URL could not be reached on ${today}. ${result?.error??''}`.trim()}
-    else console.log(`${p.company} — ${p.specific_role??'role'}: ${statusText} — ${checkedUrl}`)
-    const{error:updateError}=await supabase.from('placements').update(updates).eq('id',p.id);if(updateError)console.error(`Failed updating ${p.company} — ${p.specific_role}: ${updateError.message}`)
-  }
-  console.log(`Link monitor complete: ${checked} checked, ${broken} unreachable, ${skipped} without usable URL. Availability is determined only by reliable student-placement verification.`)
+const env = name => (process.env[name] || '').trim().replace(/^['"]|['"]$/g, '')
+const supabaseUrl = (env('SUPABASE_URL') || env('VITE_SUPABASE_URL')).replace(/\/$/, '')
+const supabaseKey = env('SUPABASE_SERVICE_ROLE_KEY')
+
+if (!supabaseUrl || !supabaseKey) {
+  console.error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.')
+  process.exit(1)
 }
-main().catch(error=>{console.error(error);process.exit(1)})
+
+const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: { persistSession: false, autoRefreshToken: false },
+  realtime: { enabled: false }
+})
+
+const TIMEOUT_MS = 15000
+const CONCURRENCY = 6
+
+function normaliseUrl(value) {
+  if (!value) return null
+  try { return new URL(value).toString() } catch { return null }
+}
+
+async function reach(url) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+  const headers = { 'User-Agent': 'placement-tracker-link-monitor/3.0' }
+  try {
+    let response
+    try {
+      response = await fetch(url, { method: 'HEAD', redirect: 'follow', signal: controller.signal, headers })
+      // Some hosts reject HEAD but serve GET.
+      if (response.status === 405 || response.status === 501) {
+        response = await fetch(url, { method: 'GET', redirect: 'follow', signal: controller.signal, headers })
+      }
+    } catch {
+      response = await fetch(url, { method: 'GET', redirect: 'follow', signal: controller.signal, headers })
+    }
+    return { ok: response.ok, status: response.status }
+  } catch (error) {
+    return { ok: false, status: null, error: error?.message ?? 'unreachable' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function main() {
+  const { data, error } = await supabase
+    .from('placements')
+    .select('id, company, specific_role, application_link, careers_page')
+    .eq('archived', false)
+    .eq('not_interested', false)
+    .order('company')
+  if (error) throw error
+
+  const rows = data ?? []
+  console.log(`Link monitor: checking ${rows.length} roles. Read-only — no rows are modified.`)
+
+  const broken = []
+  let noUrl = 0
+  let cursor = 0
+
+  async function worker() {
+    while (true) {
+      const index = cursor++
+      if (index >= rows.length) return
+      const row = rows[index]
+      const urls = [...new Set([row.application_link, row.careers_page].map(normaliseUrl).filter(Boolean))]
+      if (!urls.length) { noUrl++; continue }
+
+      let result = null
+      for (const url of urls) {
+        result = await reach(url)
+        if (result.ok) break
+      }
+      if (!result?.ok) {
+        broken.push({ ...row, detail: result?.status ? `HTTP ${result.status}` : (result?.error ?? 'unreachable'), url: urls[0] })
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rows.length) }, worker))
+
+  if (broken.length) {
+    console.log(`\n${broken.length} roles have no reachable link:`)
+    for (const row of broken) console.log(`  ${row.company} — ${row.specific_role}: ${row.detail} — ${row.url}`)
+  }
+  console.log(`\nDone: ${rows.length - broken.length - noUrl} reachable, ${broken.length} unreachable, ${noUrl} without a URL.`)
+}
+
+main().catch(error => { console.error(error); process.exit(1) })

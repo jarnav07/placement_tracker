@@ -1,53 +1,41 @@
-import type { Placement, OverallPriority } from './supabase'
+import type { ApplicationStatus, OverallPriority } from './supabase'
 
 export const PRIORITY_LABELS: Record<OverallPriority, string> = {
-  APPLY_IMMEDIATELY: 'Apply Immediately',
-  APPLY_WHEN_OPENING: 'Apply When Opening',
-  HIGH_PRIORITY_WATCH: 'High Priority Watch',
-  GOOD_BACKUP: 'Good Backup',
-  LOW_PRIORITY: 'Low Priority',
+  APPLY_IMMEDIATELY: 'Apply now',
+  APPLY_WHEN_OPENING: 'Prepare',
+  HIGH_PRIORITY_WATCH: 'High priority',
+  GOOD_BACKUP: 'Backup',
+  LOW_PRIORITY: 'Low',
+}
+
+/** Long form, used in the Excel export and the detail sheet. */
+export const PRIORITY_LONG_LABELS: Record<OverallPriority, string> = {
+  APPLY_IMMEDIATELY: 'Apply immediately',
+  APPLY_WHEN_OPENING: 'Apply when opening',
+  HIGH_PRIORITY_WATCH: 'High priority watch',
+  GOOD_BACKUP: 'Good backup',
+  LOW_PRIORITY: 'Low priority',
 }
 
 export const PRIORITY_COLORS: Record<OverallPriority, string> = {
-  APPLY_IMMEDIATELY: '#ef4444',
+  APPLY_IMMEDIATELY: '#f43f5e',
   APPLY_WHEN_OPENING: '#f97316',
   HIGH_PRIORITY_WATCH: '#eab308',
   GOOD_BACKUP: '#22c55e',
-  LOW_PRIORITY: '#9ca3af',
+  LOW_PRIORITY: '#64748b',
 }
 
-export const PRIORITY_ORDER: Record<OverallPriority, number> = {
-  APPLY_IMMEDIATELY: 0,
-  APPLY_WHEN_OPENING: 1,
-  HIGH_PRIORITY_WATCH: 2,
-  GOOD_BACKUP: 3,
-  LOW_PRIORITY: 4,
+export const STATUS_COLORS: Record<ApplicationStatus, string> = {
+  'Open Now': '#22c55e',
+  'Opening Soon': '#f97316',
+  'Expected': '#eab308',
+  'Not Yet Published': '#64748b',
+  'Closed': '#ef4444',
+  'Unknown': '#64748b',
 }
 
-export const SECTORS = ['Aerospace & Defence', 'Rockets & Space', 'F1 & Motorsport', 'Propulsion', 'Research'] as const
-
-export const STATUS_ORDER: Record<string, number> = {
-  'Open Now': 0,
-  'Opening Soon': 1,
-  'Expected': 2,
-  'Not Yet Published': 3,
-  'Closed': 4,
-}
-
-export function sortPlacements(placements: Placement[]): Placement[] {
-  return [...placements].sort((a, b) => {
-    const pa = PRIORITY_ORDER[(a.overall_priority ?? 'LOW_PRIORITY') as OverallPriority] ?? 5
-    const pb = PRIORITY_ORDER[(b.overall_priority ?? 'LOW_PRIORITY') as OverallPriority] ?? 5
-    if (pa !== pb) return pa - pb
-    const cv = (b.cv_fit ?? 0) - (a.cv_fit ?? 0)
-    if (cv !== 0) return cv
-    const sa = STATUS_ORDER[a.application_status ?? ''] ?? 5
-    const sb = STATUS_ORDER[b.application_status ?? ''] ?? 5
-    return sa - sb
-  })
-}
-
-export function scoreBarColor(score: number): string {
+/** Maps a 0-10 score to the shared score ramp used by every bar and dial. */
+export function scoreColor(score: number): string {
   if (score >= 9) return '#22c55e'
   if (score >= 7) return '#84cc16'
   if (score >= 5) return '#eab308'
@@ -55,13 +43,40 @@ export function scoreBarColor(score: number): string {
   return '#ef4444'
 }
 
-export function isTBC(value: string | null): boolean {
-  if (!value) return true
-  const v = value.toLowerCase()
-  return v === 'tbc' || v.includes('not publicly') || v.includes('not yet') || v === ''
+/** Same ramp, for the 0-100 priority score. */
+export function priorityScoreColor(score: number): string {
+  return scoreColor(score / 10)
 }
 
-export function getCountries(placements: Placement[]): string[] {
-  const set = new Set(placements.map((p) => p.country).filter(Boolean) as string[])
-  return Array.from(set).sort()
+const PLACEHOLDERS = new Set(['', 'tbc', 'n/a', 'na', 'none', 'unknown', 'not stated', 'not published', 'true', 'false'])
+
+/** True when a text field holds nothing worth showing. */
+export function isBlank(value: string | null | undefined): boolean {
+  if (!value) return true
+  const trimmed = value.trim().toLowerCase()
+  return PLACEHOLDERS.has(trimmed) || trimmed.startsWith('not publicly') || trimmed.startsWith('not yet')
+}
+
+export function orDash(value: string | null | undefined, fallback = 'TBC'): string {
+  return isBlank(value) ? fallback : (value as string).trim()
+}
+
+/** "3 days ago" / "in 12 days", for verification freshness and deadlines. */
+export function relativeDays(days: number | null): string | null {
+  if (days === null) return null
+  if (days === 0) return 'today'
+  if (days === 1) return 'tomorrow'
+  if (days === -1) return 'yesterday'
+  return days > 0 ? `in ${days} days` : `${Math.abs(days)} days ago`
+}
+
+export function formatDate(value: string | null | undefined): string | null {
+  if (isBlank(value)) return null
+  const parsed = new Date(value as string)
+  if (Number.isNaN(parsed.getTime())) return (value as string).trim()
+  return parsed.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+export function slug(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }

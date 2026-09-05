@@ -1,1 +1,0 @@
-{"root":["./src/App.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/PlacementCard.tsx","./src/lib/excel.ts","./src/lib/filtering.ts","./src/lib/supabase.ts","./src/lib/utils.ts"],"version":"5.9.3"}
