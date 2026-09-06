@@ -225,12 +225,12 @@
     height: 44px;
     border: 1px solid var(--border-strong);
     border-radius: 50%;
-    background: color-mix(in srgb, var(--surface-2) 94%, transparent);
-    box-shadow: var(--shadow-md);
-    color: var(--text-faint);
+    /* Opaque, not translucent: it floats over the list, and a card's score badge
+       showing through it read as a rendering fault. */
+    background: var(--surface-2);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55), 0 0 0 6px var(--bg);
+    color: var(--text-dim);
     font-size: 18px;
-    backdrop-filter: saturate(180%) blur(18px);
-    -webkit-backdrop-filter: saturate(180%) blur(18px);
   }
   .m-hidden-fab.is-active { background: var(--surface-3); border-color: var(--border-strong); color: var(--text); }
   .m-hidden-fab em { top: -3px; right: -3px; }
