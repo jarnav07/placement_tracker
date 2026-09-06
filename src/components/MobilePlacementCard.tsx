@@ -23,6 +23,7 @@ export default function MobilePlacementCard({ placement: p, onOpen, onPatch }: P
   const score = priorityScoreOf(p)
   const stage = p.app_status !== 'Not Applied' ? p.app_status : null
   const deadlineIn = daysUntil(p.exact_deadline)
+  const urgent = deadlineIn !== null && deadlineIn >= 0 && deadlineIn <= 21
 
   const cardRef = useRef<HTMLButtonElement>(null)
   const pointerStart = useRef<{ x: number; y: number } | null>(null)
@@ -210,10 +211,20 @@ export default function MobilePlacementCard({ placement: p, onOpen, onPatch }: P
       {swipeLabel && <span className={`mpc-swipe ${swipeSide}`}>{swipeLabel}</span>}
       <span className="mpc-body">
         <span className="mpc-top">
-          <span className="mpc-company">{p.company}</span>
-          <span className="mpc-score" style={{ color: scoreColor(score / 10) }}>{score}</span>
+          <span className="mpc-titles">
+            <span className="mpc-company">{p.company}</span>
+            <span className="mpc-role">{p.specific_role}</span>
+          </span>
+          {/* The score reads as match quality, not a stray number, so it gets a
+              tinted badge in its own colour rather than plain coloured text. */}
+          <span
+            className="mpc-score"
+            style={{ '--score-color': scoreColor(score / 10) } as React.CSSProperties}
+            title={`Ranking score ${score}/100`}
+          >
+            {score}
+          </span>
         </span>
-        <span className="mpc-role">{p.specific_role}</span>
         <span className="mpc-tags">
           <span className="mpc-tag" style={{ '--pill-accent': PRIORITY_COLORS[priority] } as React.CSSProperties}>
             {PRIORITY_LABELS[priority]}
@@ -223,10 +234,15 @@ export default function MobilePlacementCard({ placement: p, onOpen, onPatch }: P
           </span>
           {stage && <span className="mpc-tag" style={{ '--pill-accent': '#38bdf8' } as React.CSSProperties}>{stage}</span>}
         </span>
+        {/* One fact line: where, when, and how long is left — the countdown is
+            the only part that changes colour, so urgency is the thing you see. */}
         <span className="mpc-meta">
           <span>{p.city ?? p.country ?? 'Location TBC'}</span>
+          <span aria-hidden="true">·</span>
           <span>{formatDate(p.exact_deadline) ?? orDash(p.exact_deadline, 'Deadline TBC')}</span>
-          <span>{deadlineIn !== null ? relativeDays(deadlineIn) : orDash(p.salary, 'Salary TBC')}</span>
+          {deadlineIn !== null && (
+            <b className={urgent ? 'is-urgent' : undefined}>{relativeDays(deadlineIn)}</b>
+          )}
         </span>
       </span>
     </button>

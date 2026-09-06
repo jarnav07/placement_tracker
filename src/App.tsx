@@ -18,11 +18,10 @@ import './mobile.css'
 /** The pipeline reads left to right, so it is rendered in stage order, not count order. */
 const PIPELINE_STAGES = APP_STATUSES.filter(stage => stage !== 'Not Applied')
 
-const VIEWS: { key: View; label: string; short: string }[] = [
-  { key: 'opportunities', label: 'Opportunities', short: 'Board' },
-  { key: 'applications', label: 'My applications', short: 'Applied' },
-  { key: 'not-interested', label: 'Not interested', short: 'Hidden' },
-  { key: 'archived', label: 'Archived', short: 'Archive' },
+const VIEWS: { key: View; label: string; short: string; icon: string }[] = [
+  { key: 'opportunities', label: 'Opportunities', short: 'Explore', icon: '\u2302' },
+  { key: 'applications', label: 'My applications', short: 'Applications', icon: '\u2713' },
+  { key: 'not-interested', label: 'Not interested', short: 'Not interested', icon: '\u2212' },
 ]
 
 export default function App() {
@@ -113,7 +112,6 @@ export default function App() {
     soon: board.filter(p => p.application_status === 'Opening Soon').length,
     applied: placements.filter(p => !p.archived && p.app_status !== 'Not Applied').length,
     hidden: placements.filter(p => p.not_interested && !p.archived).length,
-    archived: placements.filter(p => p.archived).length,
   }), [placements, board])
 
   const priorityCounts = useMemo(() => countBy<OverallPriority>(board, priorityOf), [board])
@@ -161,7 +159,6 @@ export default function App() {
     opportunities: 'No opportunities match these filters.',
     applications: 'You have not tracked any applications yet.',
     'not-interested': 'Nothing has been marked as not interested.',
-    archived: 'Nothing has been archived.',
   }[view]
 
   const searchPlaceholder = view === 'applications'
@@ -204,9 +201,6 @@ export default function App() {
             </button>
             <button className="stat stat--muted" onClick={() => changeView('not-interested')}>
               <b>{stats.hidden}</b><span>Not interested</span>
-            </button>
-            <button className="stat stat--muted" onClick={() => changeView('archived')}>
-              <b>{stats.archived}</b><span>Archived</span>
             </button>
           </div>
         </header>
@@ -258,14 +252,6 @@ export default function App() {
                     </button>
                   ))}
             </div>
-          )}
-
-          {view === 'archived' && (
-            <p className="notice">
-              These rows were captured by the crawler but do not look like real vacancies (product pages,
-              navigation links, articles). They are kept, not deleted — open one and choose
-              <strong> Restore to board</strong> if it belongs back on the board.
-            </p>
           )}
 
           <div className="controls">
@@ -425,12 +411,22 @@ export default function App() {
         </main>
 
         <nav className="m-tabs" aria-label="Main navigation">
-          {VIEWS.map(item => (
+          {VIEWS.slice(0, 2).map(item => (
             <button key={item.key} className={view === item.key ? 'is-active' : ''} onClick={() => changeView(item.key)}>
+              <span aria-hidden="true">{item.icon}</span>
               <small>{item.short}</small>
+              {item.key === 'applications' && stats.applied > 0 && <em>{stats.applied}</em>}
             </button>
           ))}
         </nav>
+        <button
+          className={`m-hidden-fab ${view === 'not-interested' ? 'is-active' : ''}`}
+          onClick={() => changeView('not-interested')}
+          aria-label={`Not interested (${stats.hidden})`}
+        >
+          <span aria-hidden="true">{'\u2212'}</span>
+          {stats.hidden > 0 && <em>{stats.hidden}</em>}
+        </button>
 
         {selected && (
           <div className="m-sheet-backdrop" onClick={() => setSelectedId(null)}>

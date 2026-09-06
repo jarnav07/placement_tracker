@@ -7,7 +7,7 @@
     display: flex;
     flex-direction: column;
     min-height: 100dvh;
-    padding-bottom: calc(74px + env(safe-area-inset-bottom));
+    padding-bottom: calc(148px + env(safe-area-inset-bottom));
     background: var(--bg);
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', var(--font);
   }
@@ -48,20 +48,26 @@
   /* --- Body --- */
   .m-main { flex: 1; padding: 0 14px 20px; }
 
-  .m-stats {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 4px;
-    margin: 14px 0;
-    padding: 4px;
+  .m-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0; }
+  .m-stats button {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 12px 14px;
     border: 1px solid var(--border);
-    border-radius: var(--r-lg);
+    border-radius: 16px;
     background: var(--surface);
+    text-align: left;
   }
-  .m-stats button { padding: 10px 4px; border-radius: var(--r-md); text-align: center; }
-  .m-stats button:active { background: var(--surface-2); }
-  .m-stats b { display: block; font-size: 1.2rem; letter-spacing: -0.035em; }
-  .m-stats span { display: block; margin-top: 3px; color: var(--text-faint); font-size: 0.58rem; font-weight: 650; }
+  /* The first cell is "Open now" — the only number that means act today. */
+  .m-stats button:first-child { background: var(--surface-2); }
+  .m-stats button:active { background: var(--surface-3); }
+  .m-stats b { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; }
+  .m-stats button:nth-child(1) b { color: #34d399; }
+  .m-stats button:nth-child(2) b { color: #fb923c; }
+  .m-stats button:nth-child(3) b { color: var(--accent); }
+  .m-stats span { color: var(--text-faint); font-size: 0.58rem; font-weight: 650; }
 
   .m-search {
     display: flex;
@@ -156,23 +162,78 @@
   .m-empty b { color: var(--text); font-size: 1rem; }
   .m-empty button { margin-top: 8px; padding: 9px 18px; border: 1px solid var(--border); border-radius: var(--r-sm); color: var(--text); }
 
-  /* --- Bottom tab bar --- */
+  /* --- Bottom tab bar ---
+     A floating pill inset from the edges, with Not Interested lifted out into its
+     own round button above it. Two primary destinations stay full-width and
+     thumb-reachable; the third is present without stealing a third of the bar. */
   .m-tabs {
     position: fixed;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 40;
+    left: 10px;
+    right: 10px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    z-index: 80;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
-    background: color-mix(in srgb, var(--bg) 88%, transparent);
-    border-top: 1px solid var(--border);
-    backdrop-filter: saturate(180%) blur(22px);
+    grid-template-columns: repeat(2, 1fr);
+    height: 64px;
+    padding: 5px;
+    border: 1px solid var(--border-strong);
+    border-radius: 22px;
+    background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+    box-shadow: var(--shadow-lg);
+    backdrop-filter: saturate(180%) blur(24px);
+    -webkit-backdrop-filter: saturate(180%) blur(24px);
   }
-  .m-tabs button { padding: 8px 2px; border-radius: var(--r-sm); color: var(--text-faint); }
-  .m-tabs button small { font-size: 0.66rem; font-weight: 650; }
-  .m-tabs button.is-active { color: var(--accent); }
+  .m-tabs button {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border-radius: 17px;
+    color: var(--text-faint);
+    transition: background 0.15s, color 0.15s;
+  }
+  .m-tabs button.is-active { background: var(--surface-3); color: var(--text); }
+  .m-tabs button span { font-size: 19px; line-height: 18px; }
+  .m-tabs button small { font-size: 0.53rem; font-weight: 650; }
+  .m-tabs button em,
+  .m-hidden-fab em {
+    position: absolute;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: var(--r-full);
+    background: var(--accent);
+    color: #04121d;
+    font-size: 0.53rem;
+    font-style: normal;
+    font-weight: 700;
+    line-height: 15px;
+    text-align: center;
+  }
+  .m-tabs button em { top: 5px; right: 22%; }
+
+  .m-hidden-fab {
+    position: fixed;
+    right: 16px;
+    bottom: calc(84px + env(safe-area-inset-bottom));
+    z-index: 90;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 1px solid var(--border-strong);
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--surface-2) 94%, transparent);
+    box-shadow: var(--shadow-md);
+    color: var(--text-faint);
+    font-size: 18px;
+    backdrop-filter: saturate(180%) blur(18px);
+    -webkit-backdrop-filter: saturate(180%) blur(18px);
+  }
+  .m-hidden-fab.is-active { background: var(--surface-3); border-color: var(--border-strong); color: var(--text); }
+  .m-hidden-fab em { top: -3px; right: -3px; }
 
   /* --- Detail sheet --- */
   .m-sheet-backdrop {

@@ -71,11 +71,6 @@ export default function PlacementDetail({ placement: p, onPatch, onClose }: Prop
         >
           {p.not_interested ? 'Move back to opportunities' : 'Not interested'}
         </button>
-        {p.archived && (
-          <button className="btn btn-ghost is-on" onClick={() => onPatch({ archived: false })}>
-            Restore to board
-          </button>
-        )}
       </div>
 
       <Section title="My application">

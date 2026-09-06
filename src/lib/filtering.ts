@@ -19,7 +19,7 @@ export const SORT_OPTIONS = {
 } as const
 export type SortOption = keyof typeof SORT_OPTIONS
 
-export type View = 'opportunities' | 'applications' | 'not-interested' | 'archived'
+export type View = 'opportunities' | 'applications' | 'not-interested'
 
 export interface Filters {
   priority: OverallPriority | 'all'
@@ -91,16 +91,18 @@ export function daysUntil(value: string | null, now = Date.now()): number | null
 // --- Views ---------------------------------------------------------------
 
 /**
- * The board only ever shows real, wanted roles. `archived` hides links the
- * crawler mistook for a vacancy; `not_interested` hides roles the user rejected.
- * Neither deletes the row, and each has its own view.
+ * `archived` rows are links the crawler mistook for a vacancy. They are hidden
+ * from EVERY view — there is deliberately no archive tab — but the rows are kept,
+ * so a mis-archived role can be restored with a single SQL update.
+ *
+ * `not_interested` is the user's own rejection and keeps its own view.
  */
 export function placementsForView(placements: Placement[], view: View): Placement[] {
+  const real = placements.filter(p => !p.archived)
   switch (view) {
-    case 'archived': return placements.filter(p => p.archived)
-    case 'not-interested': return placements.filter(p => p.not_interested && !p.archived)
-    case 'applications': return placements.filter(p => !p.archived && p.app_status !== 'Not Applied')
-    default: return placements.filter(p => !p.archived && !p.not_interested)
+    case 'not-interested': return real.filter(p => p.not_interested)
+    case 'applications': return real.filter(p => p.app_status !== 'Not Applied')
+    default: return real.filter(p => !p.not_interested)
   }
 }
 
