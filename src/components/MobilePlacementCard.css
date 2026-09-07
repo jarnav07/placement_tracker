@@ -96,6 +96,33 @@
   white-space: nowrap;
 }
 
+/* "Just opened". Solid rather than tinted so it reads as a mark, not a category:
+   every other tag on this row describes what the role IS, this one says it is
+   something the user has not seen before. */
+.mpc-tag--new {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: #04121f;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.mpc-tag--new i {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--r-full);
+  background: currentColor;
+  animation: new-pulse 2.4s ease-in-out infinite;
+}
+.mpc.just-opened .mpc-body { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+
+@media (prefers-reduced-motion: reduce) {
+  .mpc-tag--new i { animation: none; }
+}
+
 .mpc-meta {
   display: flex;
   align-items: center;

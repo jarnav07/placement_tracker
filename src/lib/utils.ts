@@ -80,3 +80,36 @@ export function formatDate(value: string | null | undefined): string | null {
 export function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
+
+// --- Dates ------------------------------------------------------------------
+// These live here, not in filtering.ts, because ranking.ts needs them and
+// filtering.ts imports ranking.ts. `src/lib/filtering.ts` re-exports them so the
+// components' existing imports keep working.
+
+/**
+ * Parses the free-text date columns. Returns null rather than NaN.
+ *
+ * The 2026-09-07 migration normalises day-precision values to ISO and strips
+ * prose that holds no date, but month-precision text ("November 2026") is kept
+ * deliberately, so this still has to handle it.
+ */
+export function parseDate(value: string | null | undefined): number | null {
+  if (!value) return null
+  const iso = value.match(/(20\d{2})-(\d{1,2})-(\d{1,2})/)
+  if (iso) return Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]))
+  const parsed = Date.parse(value)
+  return Number.isNaN(parsed) ? null : parsed
+}
+
+/**
+ * Whole days until the date; null when it cannot be parsed. Anchored to today's
+ * midnight so a deadline does not read as "in 0 days" all afternoon and then
+ * silently flip to "yesterday".
+ */
+export function daysUntil(value: string | null | undefined, now = Date.now()): number | null {
+  const at = parseDate(value)
+  if (at === null) return null
+  const today = new Date(now)
+  const midnight = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())
+  return Math.round((at - midnight) / 86_400_000)
+}

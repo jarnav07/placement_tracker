@@ -69,6 +69,13 @@ button.stat:hover { background: var(--surface-2); border-color: var(--border-str
 .stat span { color: var(--text-faint); font-size: 0.68rem; font-weight: 600; letter-spacing: 0.03em; }
 .stat--open b { color: #34d399; }
 .stat--soon b { color: #fb923c; }
+/* Only rendered when something has actually opened in the last few days, so it
+   is allowed to be the loudest cell in the row. */
+.stat--new b { color: var(--accent); }
+.stat--new {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--accent-soft);
+}
 .stat--applied b { color: var(--accent); }
 .stat--muted b { color: var(--text-dim); }
 

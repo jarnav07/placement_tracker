@@ -98,9 +98,15 @@ export interface Placement {
   why_it_fits: string | null
   potential_weaknesses: string | null
 
-  // --- Ranking (DERIVED in Postgres — read-only) ---
+  // --- Ranking and opening history (DERIVED in Postgres — read-only) ---
   priority_score: number
   overall_priority: OverallPriority
+  /**
+   * Stamped by the `placements_opening` trigger the moment `application_status`
+   * becomes "Open Now". Drives the "New" marker on the board. Null for roles that
+   * were already open before the trigger existed, and for roles never opened.
+   */
+  opened_at: string | null
 
   // --- Verification trail (researched) ---
   source_date_checked: string | null

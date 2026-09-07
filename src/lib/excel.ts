@@ -54,6 +54,8 @@ const COLUMNS: { header: string; value: (p: Placement) => string | number }[] = 
   { header: 'My notes', value: p => p.notes ?? '' },
   { header: 'Not interested', value: p => (p.not_interested ? 'Yes' : '') },
   { header: 'Last verified', value: p => p.source_date_checked ?? '' },
+  // When applications actually opened, stamped by the placements_opening trigger.
+  { header: 'Applications opened', value: p => (p.opened_at ? p.opened_at.slice(0, 10) : '') },
   { header: 'Verification evidence', value: p => p.source_verified ?? '' },
 ]
 

@@ -37,6 +37,47 @@
 .card .btn,
 .card a { pointer-events: auto; }
 
+/* "Just opened" — applications for this role opened in the last few days.
+   A corner tab rather than another pill in the tag row: the point of the mark is
+   that it is findable while scanning a full board, and the tag row is already
+   carrying priority, status, type and stage. Placed top-left, continuing the
+   priority band, so it never collides with the score dial.
+   The `>` selector matches the specificity of the `position: relative` rule
+   above; without it the tab would be laid out inline. */
+.card > .card-new {
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px 3px 9px;
+  border-radius: var(--r-lg) 0 var(--r-lg) 0;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: #04121f;
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.card > .card-new i {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--r-full);
+  background: currentColor;
+  animation: new-pulse 2.4s ease-in-out infinite;
+}
+/* Tint the border only. The left band stays the priority colour — it is the
+   card's fastest read and the "new" tab must not overwrite it. */
+.card.just-opened { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+
+/* `new-pulse` is defined in src/index.css alongside `flash-new`, because the
+   mobile card uses it too and a keyframe must not live in one component's file. */
+@media (prefers-reduced-motion: reduce) {
+  .card > .card-new i { animation: none; }
+}
+
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .card-title { min-width: 0; }
 .card-title h3 { font-size: 1rem; overflow-wrap: anywhere; }

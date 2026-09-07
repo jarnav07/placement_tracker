@@ -161,3 +161,10 @@ input, select, textarea { font: inherit; color: inherit; }
   0% { box-shadow: 0 0 0 2px #22c55e, 0 0 24px rgba(34, 197, 94, 0.35); }
   100% { box-shadow: none; }
 }
+
+/* The dot inside the "New" mark on a role whose applications just opened.
+   Shared by the desktop card, the mobile card and the detail panel. */
+@keyframes new-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}

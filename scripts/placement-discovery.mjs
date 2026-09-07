@@ -266,12 +266,16 @@ async function main() {
 
       const result = verification.result
       const mapped = result.mappedApplicationStatus
-      const intake2027 = result.intake_year_confirmed === true && /\b2027\b/.test(String(result.intake_year ?? ''))
+      // Most genuine postings never print the intake year, so requiring a
+      // confirmed "2027" here rejected real vacancies. `intake_2027_acceptable`
+      // means the year is either stated as 2027 or unstated with nothing
+      // contradicting it — see scripts/verify/record.mjs.
+      const intakeOk = result.intake_2027_acceptable === true || result.intake_year_confirmed === true
       const link = result.verified_application_url || candidate.application_link || ''
       const valid = (
         result.exact_student_program_found === true &&
         result.exact_role_found === true &&
-        intake2027 &&
+        intakeOk &&
         Boolean(link) &&
         ['Open Now', 'Opening Soon', 'Expected', 'Not Yet Published'].includes(mapped)
       )

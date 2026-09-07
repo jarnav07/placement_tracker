@@ -66,6 +66,12 @@
   .m-stats b { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.03em; line-height: 1.1; }
   .m-stats button:nth-child(1) b { color: #34d399; }
   .m-stats button:nth-child(2) b { color: #fb923c; }
+  /* The middle cell becomes "Just opened" whenever something has, and says so. */
+  .m-stats button.is-new {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+    background: var(--accent-soft);
+  }
+  .m-stats button.is-new b { color: var(--accent); }
   .m-stats button:nth-child(3) b { color: var(--accent); }
   .m-stats span { color: var(--text-faint); font-size: 0.58rem; font-weight: 650; }
 

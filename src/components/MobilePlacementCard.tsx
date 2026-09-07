@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import type { Placement, PlacementPatch } from '../lib/supabase'
 import { PRIORITY_COLORS, PRIORITY_LABELS, STATUS_COLORS, orDash, relativeDays, formatDate } from '../lib/utils'
-import { priorityOf, priorityScoreOf } from '../lib/ranking'
+import { priorityOf, priorityScoreOf, isNewlyOpened, openedAgo } from '../lib/ranking'
 import { daysUntil } from '../lib/filtering'
 import { scoreColor } from '../lib/utils'
 import './MobilePlacementCard.css'
@@ -24,6 +24,7 @@ export default function MobilePlacementCard({ placement: p, onOpen, onPatch }: P
   const stage = p.app_status !== 'Not Applied' ? p.app_status : null
   const deadlineIn = daysUntil(p.exact_deadline)
   const urgent = deadlineIn !== null && deadlineIn >= 0 && deadlineIn <= 21
+  const justOpened = isNewlyOpened(p)
 
   const cardRef = useRef<HTMLButtonElement>(null)
   const pointerStart = useRef<{ x: number; y: number } | null>(null)
@@ -195,7 +196,7 @@ export default function MobilePlacementCard({ placement: p, onOpen, onPatch }: P
   return (
     <button
       ref={cardRef}
-      className="mpc"
+      className={`mpc${justOpened ? ' just-opened' : ''}`}
       style={{ '--priority-color': PRIORITY_COLORS[priority] } as React.CSSProperties}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -226,6 +227,13 @@ export default function MobilePlacementCard({ placement: p, onOpen, onPatch }: P
           </span>
         </span>
         <span className="mpc-tags">
+          {/* Applications opened in the last few days. First in the row so it is
+              the first thing read while thumbing down the list. */}
+          {justOpened && (
+            <span className="mpc-tag mpc-tag--new" title={openedAgo(p) ?? 'Recently opened'}>
+              <i aria-hidden="true" />New
+            </span>
+          )}
           <span className="mpc-tag" style={{ '--pill-accent': PRIORITY_COLORS[priority] } as React.CSSProperties}>
             {PRIORITY_LABELS[priority]}
           </span>

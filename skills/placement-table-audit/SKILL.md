@@ -33,7 +33,8 @@ and can say why.
 | Class | Columns | May you write it? |
 | --- | --- | --- |
 | Identity | `company`, `specific_role` | **No** — only to fix a demonstrably malformed value (scraped HTML, `See Gradcracker listing`), and say so in the report. |
-| Derived | `priority_score`, `overall_priority` | **Never.** A Postgres trigger owns them. They recompute themselves when you write `cv_fit`, the relevance scores, `prestige`, `career_value`, `application_status` or `opportunity_type`. |
+| Derived | `priority_score`, `overall_priority` | **Never.** A Postgres trigger owns them. They recompute themselves when you write `cv_fit`, the relevance scores, `prestige`, `career_value`, `application_status`, `opportunity_type` or `exact_deadline`. |
+| Derived | `opened_at` | **Never.** The `placements_opening` trigger stamps it when `application_status` becomes `Open Now`. Writing it by hand fakes a role being new. |
 | User-owned | `app_status`, `date_applied`, `cv_version`, `cover_letter_required`, `referral_contact`, `interview_date`, `notes`, `not_interested`, `archived` | **Never**, unless the user explicitly asks. |
 | Researched | everything else | Yes, when you have evidence. |
 
@@ -78,7 +79,7 @@ search snippets. **A weaker source never overwrites a stronger, current, verifie
 | Identity | `company`, `specific_role`, `start_year` | A real employer and one actionable role. `start_year` is 2027. |
 | Classification | `sector`, `engineering_area`, `opportunity_type`, `country`, `city` | `opportunity_type` is one of the four allowed values and reflects what the programme actually is. |
 | Programme | `placement_duration`, `placement_start_date`, `placement_end_date`, `salary`, `other_benefits` | Published facts only. `TBC` where the employer has not said. |
-| Availability | `application_status`, `exact_opening_date`, `exact_deadline`, `deadline_type` | See the status rules below. |
+| Availability | `application_status`, `exact_opening_date`, `exact_deadline`, `deadline_type` | See the status rules below. **Dates must be ISO `YYYY-MM-DD`, or `Month YYYY` when only the month is known — never prose.** "Not published" is an empty value plus a `deadline_type`; prose in a date column breaks the automatic opening rule and the deadline weighting. A day-precision `exact_opening_date` will open the placement automatically on that day, so never invent one. |
 | Links | `website`, `careers_page`, `application_link` | `application_link` points at this role, not a job search. |
 | Eligibility | `degree_requirements`, `min_grade_requirement`, `year_of_study_requirement`, `required_technical_skills`, `work_eligibility`, `security_clearance_requirement` | As published. |
 | Fit | `cv_fit`, the six relevance scores, `prestige`, `career_value`, `why_it_fits`, `potential_weaknesses` | Scored for **this** user, role-specific prose, never copied between rows. |

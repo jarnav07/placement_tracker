@@ -1,12 +1,13 @@
 import type { Placement } from '../lib/supabase'
 import { PRIORITY_COLORS, PRIORITY_LABELS, STATUS_COLORS, orDash, relativeDays, formatDate, slug } from '../lib/utils'
-import { priorityOf, priorityScoreOf, domainRelevance } from '../lib/ranking'
+import { priorityOf, priorityScoreOf, domainRelevance, isNewlyOpened, openedAgo } from '../lib/ranking'
 import { countryGroup, daysUntil, sectorGroup } from '../lib/filtering'
 import { Pill, ScoreDial } from './ui'
 import './PlacementCard.css'
 
 interface Props {
   placement: Placement
+  /** Inserted into the board while this tab was open — a brief highlight, not the badge. */
   isNew?: boolean
   isSelected?: boolean
   onOpen: () => void
@@ -21,6 +22,9 @@ export default function PlacementCard({ placement: p, isNew, isSelected, onOpen 
   const score = priorityScoreOf(p)
   const deadlineIn = daysUntil(p.exact_deadline)
   const urgent = deadlineIn !== null && deadlineIn >= 0 && deadlineIn <= 21
+  // Applications opened within the last few days — the mark that says "this is
+  // one you have not seen yet". Survives a reload, unlike the insert highlight.
+  const justOpened = isNewlyOpened(p)
   // The scraped `city` sometimes already carries the country; do not repeat it.
   const cityText = (p.city ?? '').trim()
   const countryText = (p.country ?? '').trim()
@@ -33,11 +37,18 @@ export default function PlacementCard({ placement: p, isNew, isSelected, onOpen 
         'card',
         `card--${slug(priority)}`,
         isNew ? 'is-new' : '',
+        justOpened ? 'just-opened' : '',
         isSelected ? 'is-selected' : '',
       ].filter(Boolean).join(' ')}
       style={{ '--priority-color': PRIORITY_COLORS[priority] } as React.CSSProperties}
     >
       <button className="card-hit" onClick={onOpen} aria-label={`Open ${p.company} — ${p.specific_role}`} />
+
+      {justOpened && (
+        <span className="card-new" title={openedAgo(p) ?? 'Recently opened'}>
+          <i aria-hidden="true" />New
+        </span>
+      )}
 
       <header className="card-head">
         <div className="card-title">

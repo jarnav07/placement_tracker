@@ -6,7 +6,7 @@ import {
   EMPTY_FILTERS, countBy, filterPlacements, hasActiveFilters, placementsForView, sortPlacements,
   type Filters as FilterState, type SortOption, type View,
 } from './lib/filtering'
-import { priorityOf } from './lib/ranking'
+import { priorityOf, isNewlyOpened } from './lib/ranking'
 import { downloadExcel } from './lib/excel'
 import PlacementCard from './components/PlacementCard'
 import PlacementDetail from './components/PlacementDetail'
@@ -110,6 +110,8 @@ export default function App() {
     board: board.length,
     open: board.filter(p => p.application_status === 'Open Now').length,
     soon: board.filter(p => p.application_status === 'Opening Soon').length,
+    // Opened within the last few days — the roles worth looking at first.
+    justOpened: board.filter(isNewlyOpened).length,
     applied: placements.filter(p => !p.archived && p.app_status !== 'Not Applied').length,
     hidden: placements.filter(p => p.not_interested && !p.archived).length,
   }), [placements, board])
@@ -145,10 +147,14 @@ export default function App() {
     setFilters(prev => (next === 'applications' ? prev : { ...prev, stage: 'all' }))
   }, [])
 
-  const jumpTo = useCallback((patch: Partial<FilterState>) => {
+  const jumpTo = useCallback((patch: Partial<FilterState>, nextSort: SortOption = 'priority') => {
     setView('opportunities')
     setFilters({ ...EMPTY_FILTERS, ...patch })
+    setSort(nextSort)
   }, [])
+
+  /** The stat row's shortcut to what just opened, newest first. */
+  const showJustOpened = useCallback(() => jumpTo({ status: 'Open Now' }, 'newest'), [jumpTo])
 
   const patchSelected = useCallback(
     (patch: PlacementPatch) => { if (selectedId) void patchPlacement(selectedId, patch) },
@@ -193,6 +199,11 @@ export default function App() {
             <button className="stat stat--open" onClick={() => jumpTo({ status: 'Open Now' })}>
               <b>{stats.open}</b><span>Open now</span>
             </button>
+            {stats.justOpened > 0 && (
+              <button className="stat stat--new" onClick={showJustOpened}>
+                <b>{stats.justOpened}</b><span>Just opened</span>
+              </button>
+            )}
             <button className="stat stat--soon" onClick={() => jumpTo({ status: 'Opening Soon' })}>
               <b>{stats.soon}</b><span>Opening soon</span>
             </button>
@@ -331,7 +342,9 @@ export default function App() {
           {view === 'opportunities' && (
             <div className="m-stats">
               <button onClick={() => jumpTo({ status: 'Open Now' })}><b>{stats.open}</b><span>Open now</span></button>
-              <button onClick={() => jumpTo({ status: 'Opening Soon' })}><b>{stats.soon}</b><span>Opening soon</span></button>
+              {stats.justOpened > 0
+                ? <button className="is-new" onClick={showJustOpened}><b>{stats.justOpened}</b><span>Just opened</span></button>
+                : <button onClick={() => jumpTo({ status: 'Opening Soon' })}><b>{stats.soon}</b><span>Opening soon</span></button>}
               <button onClick={() => changeView('applications')}><b>{stats.applied}</b><span>Applied</span></button>
             </div>
           )}

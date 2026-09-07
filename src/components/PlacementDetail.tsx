@@ -2,7 +2,7 @@ import type { ChangeEvent } from 'react'
 import type { Placement, PlacementPatch, AppStatus } from '../lib/supabase'
 import { APP_STATUSES } from '../lib/supabase'
 import { PRIORITY_COLORS, PRIORITY_LONG_LABELS, STATUS_COLORS, formatDate, orDash, relativeDays } from '../lib/utils'
-import { explainScore, priorityOf, priorityScoreOf } from '../lib/ranking'
+import { explainScore, priorityOf, priorityScoreOf, isNewlyOpened, openedAgo } from '../lib/ranking'
 import { daysUntil, sectorGroup } from '../lib/filtering'
 import { Field, Pill, ScoreBar, ScoreDial, Section } from './ui'
 import './PlacementDetail.css'
@@ -44,6 +44,7 @@ export default function PlacementDetail({ placement: p, onPatch, onClose }: Prop
           <div className="detail-tags">
             <Pill tone={PRIORITY_COLORS[priority]}>{PRIORITY_LONG_LABELS[priority]}</Pill>
             <Pill tone={STATUS_COLORS[p.application_status]}>{p.application_status}</Pill>
+            {isNewlyOpened(p) && <Pill tone="#38bdf8">{openedAgo(p) ?? 'Just opened'}</Pill>}
             {p.start_year && <Pill>{p.start_year} intake</Pill>}
           </div>
         </div>
@@ -142,6 +143,7 @@ export default function PlacementDetail({ placement: p, onPatch, onClose }: Prop
       <Section title="Timing">
         <dl className="field-list">
           <Field label="Applications open" value={formatDate(p.exact_opening_date) ?? orDash(p.exact_opening_date, '')} />
+          <Field label="Opened" value={openedAgo(p)} />
           <Field label="Deadline" value={formatDate(p.exact_deadline) ?? orDash(p.exact_deadline, '')} />
           <Field label="Deadline type" value={p.deadline_type} />
           <Field label="Placement starts" value={p.placement_start_date} />

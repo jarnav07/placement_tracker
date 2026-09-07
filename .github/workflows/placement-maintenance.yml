@@ -2,9 +2,18 @@ name: Placement Maintenance
 
 on:
   schedule:
-    # GitHub cron is UTC only. Firing at both 15:00 and 16:00 UTC and letting the
-    # job decide keeps the effective schedule at 16:00 Europe/London across the
-    # BST/GMT changeover.
+    # GitHub cron is UTC only, so each London time needs both its GMT and its BST
+    # hour and a gate job decides which one is real. See the `gate` job below.
+    #
+    # 07:00 London — scheduled openings only (cheap, no AI provider). A placement
+    # whose employer published today as the day applications open is flipped
+    # before the working day starts, instead of waiting for the evening pass.
+    - cron: '0 6 * * *'
+    - cron: '0 7 * * *'
+    # 12:00 London — scheduled openings again, for campaigns that go live at noon.
+    - cron: '0 11 * * *'
+    - cron: '0 12 * * *'
+    # 16:00 London — the full pass: discovery, verification, then openings.
     - cron: '0 15 * * *'
     - cron: '0 16 * * *'
   workflow_dispatch:
@@ -12,10 +21,10 @@ on:
       steps:
         description: Which steps to run
         type: choice
-        default: discover-and-audit
-        options: [discover-and-audit, audit-only, discover-only]
+        default: discover-and-verify
+        options: [discover-and-verify, verify-only, discover-only, openings-only]
       limit:
-        description: 'Verify at most N roles (0 = all). Least recently verified first.'
+        description: 'Verify at most N roles (0 = all). Highest-value roles first.'
         type: string
         default: '0'
       only_stale_days:
@@ -32,48 +41,92 @@ permissions:
 
 concurrency:
   group: placement-maintenance
-  # An interrupted audit must not leave the board half-updated.
+  # An interrupted verification must not leave the board half-updated.
   cancel-in-progress: false
 
 jobs:
   gate:
-    # The schedule fires twice; only the 16:00 Europe/London invocation should do
-    # work. A manual run is ALWAYS honoured — the previous version applied the
+    # Each London time fires twice (its GMT hour and its BST hour); only the one
+    # that is actually the intended London time should do work, and it decides
+    # WHICH work. A manual run is ALWAYS honoured — an earlier version applied the
     # clock gate to workflow_dispatch too, so manual runs silently did nothing
-    # unless they happened to be started at exactly 4 PM UK.
+    # unless they happened to start at exactly 4 PM UK.
     runs-on: ubuntu-latest
     outputs:
-      run: ${{ steps.decide.outputs.run }}
+      mode: ${{ steps.decide.outputs.mode }}
     steps:
       - id: decide
         run: |
           if [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Manual run — proceeding."
+            echo "mode=${{ inputs.steps || 'discover-and-verify' }}" >> "$GITHUB_OUTPUT"
+            echo "Manual run — proceeding with '${{ inputs.steps || 'discover-and-verify' }}'."
             exit 0
           fi
-          UK_TIME="$(TZ=Europe/London date +%H:%M)"
-          if [ "$UK_TIME" = "16:00" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "Proceeding at $(TZ=Europe/London date '+%Y-%m-%d %H:%M %Z')."
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping non-4 PM UK trigger at $(TZ=Europe/London date '+%Y-%m-%d %H:%M %Z')."
+
+          UK_HOUR="$(TZ=Europe/London date +%H)"
+          case "$UK_HOUR" in
+            16) MODE=discover-and-verify ;;
+            07|12) MODE=openings-only ;;
+            *) MODE=none ;;
+          esac
+
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "London time is $(TZ=Europe/London date '+%Y-%m-%d %H:%M %Z') — mode '$MODE'."
+
+  # Flips placements whose employer published today as the day applications open.
+  # Deliberately separate from `maintain`: it needs no AI provider and no crawl,
+  # so it can run several times a day for the cost of one database query.
+  openings:
+    needs: gate
+    if: needs.gate.outputs.mode == 'openings-only'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Check required secrets
+        run: |
+          missing=""
+          for name in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing"
+            exit 1
           fi
+
+      - name: Apply published opening dates
+        run: npm run openings
 
   maintain:
     needs: gate
-    if: needs.gate.outputs.run == 'true'
+    if: contains(fromJSON('["discover-and-verify", "verify-only", "discover-only"]'), needs.gate.outputs.mode)
     runs-on: ubuntu-latest
     timeout-minutes: 350
 
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      # PRIMARY verification provider.
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+      # SECONDARY verification provider, consulted on contested or consequential
+      # decisions. Keeping it is deliberate: two independent providers must agree
+      # before a role is marked Closed.
       AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
       AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
       AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
-      STEPS: ${{ inputs.steps || 'discover-and-audit' }}
+      MODE: ${{ needs.gate.outputs.mode }}
 
     steps:
       - uses: actions/checkout@v4
@@ -88,32 +141,48 @@ jobs:
       - name: Check required secrets
         run: |
           missing=""
-          for name in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY AZURE_OPENAI_API_KEY AZURE_OPENAI_ENDPOINT AZURE_OPENAI_DEPLOYMENT_NAME; do
+          for name in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY GEMINI_API_KEY; do
             [ -n "${!name}" ] || missing="$missing $name"
           done
           if [ -n "$missing" ]; then
             echo "::error::Missing repository secrets:$missing"
+            echo "::error::GEMINI_API_KEY is the primary verifier. Add it under Settings → Secrets and variables → Actions."
             exit 1
           fi
+
+          # Azure is the second opinion. Without it a role can still be opened,
+          # but closing one loses its independent corroboration, so say so loudly
+          # rather than degrading quietly.
+          for name in AZURE_OPENAI_API_KEY AZURE_OPENAI_ENDPOINT AZURE_OPENAI_DEPLOYMENT_NAME; do
+            if [ -z "${!name}" ]; then
+              echo "::warning::$name is not set — running without the Azure second opinion."
+            fi
+          done
 
       # Deterministic crawl of career pages already tracked. Only links whose own
       # label and URL read as a student vacancy become candidates, and each one is
       # verified before it is inserted.
       - name: Discover new 2027 placements
-        if: env.STEPS != 'audit-only'
+        if: env.MODE != 'verify-only'
         env:
+          USE_GEMINI: 'true'
           USE_AZURE: 'true'
-          USE_GROQ: 'false'
-          USE_OPENAI: 'false'
         run: npm run discover
 
-      # Azure OpenAI re-researches each tracked role and writes back the
-      # researched columns. Identity, derived ranking and user-owned tracking
-      # columns are never written.
-      - name: Verify and enrich every tracked placement
-        if: env.STEPS != 'discover-only'
+      # Gemini (primary) and Azure (secondary) re-research each tracked role over
+      # the tracker's own deterministic evidence, and write back the researched
+      # columns. Identity, derived ranking and user-owned tracking columns are
+      # never written.
+      - name: Verify every tracked placement
+        if: env.MODE != 'discover-only'
         env:
           AUDIT_LIMIT: ${{ inputs.limit || '0' }}
           AUDIT_ONLY_STALE_DAYS: ${{ inputs.only_stale_days || '0' }}
           AUDIT_INCLUDE_NOT_INTERESTED: ${{ inputs.include_not_interested || 'false' }}
-        run: npm run audit:azure
+        run: npm run verify
+
+      # Last word of the day: any placement whose published opening date has now
+      # arrived is open, whether or not verification could reach the employer.
+      - name: Apply published opening dates
+        if: env.MODE != 'discover-only'
+        run: npm run openings

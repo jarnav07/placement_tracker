@@ -1,5 +1,6 @@
 import type { AppStatus, ApplicationStatus, OpportunityType, OverallPriority, Placement } from './supabase'
-import { priorityOf, priorityScoreOf } from './ranking'
+import { priorityOf, priorityScoreOf, isNewlyOpened } from './ranking'
+import { parseDate, daysUntil } from './utils'
 
 export const COUNTRY_GROUPS = ['UK', 'Europe', 'America', 'Asia', 'Oceania'] as const
 export type CountryGroup = (typeof COUNTRY_GROUPS)[number]
@@ -11,6 +12,7 @@ export type SectorGroup = (typeof SECTOR_GROUPS)[number]
 
 export const SORT_OPTIONS = {
   priority: 'Best match',
+  newest: 'Just opened',
   deadline: 'Deadline first',
   opening: 'Opening date',
   cv_fit: 'CV fit',
@@ -72,21 +74,9 @@ export function sectorGroup(p: Pick<Placement, 'sector' | 'company' | 'engineeri
   return 'Engineering & Technology'
 }
 
-/** Parses the free-text date columns. Returns null rather than NaN. */
-export function parseDate(value: string | null): number | null {
-  if (!value) return null
-  const iso = value.match(/(20\d{2})-(\d{1,2})-(\d{1,2})/)
-  if (iso) return Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]))
-  const parsed = Date.parse(value)
-  return Number.isNaN(parsed) ? null : parsed
-}
-
-/** Whole days until the deadline; null when there is no parseable deadline. */
-export function daysUntil(value: string | null, now = Date.now()): number | null {
-  const at = parseDate(value)
-  if (at === null) return null
-  return Math.round((at - now) / 86_400_000)
-}
+// Date parsing lives in `./utils` (ranking.ts needs it, and this module imports
+// ranking.ts). Re-exported here so the components' existing imports keep working.
+export { parseDate, daysUntil }
 
 // --- Views ---------------------------------------------------------------
 
@@ -154,10 +144,23 @@ export function sortPlacements(placements: Placement[], sort: SortOption): Place
     || a.company.localeCompare(b.company)
     || a.specific_role.localeCompare(b.specific_role)
 
+  /** Most recently opened first; roles that have never opened sort last. */
+  const byOpening = (a: Placement, b: Placement) => {
+    const left = a.opened_at ? Date.parse(a.opened_at) : NaN
+    const right = b.opened_at ? Date.parse(b.opened_at) : NaN
+    if (Number.isNaN(left) && Number.isNaN(right)) return 0
+    if (Number.isNaN(left)) return 1
+    if (Number.isNaN(right)) return -1
+    return right - left
+  }
+
   return [...placements].sort((a, b) => {
     switch (sort) {
       case 'company':
         return a.company.localeCompare(b.company) || a.specific_role.localeCompare(b.specific_role)
+      case 'newest':
+        // Freshly opened roles first — the ones the user has not seen yet.
+        return (Number(isNewlyOpened(b)) - Number(isNewlyOpened(a))) || byOpening(a, b) || tiebreak(a, b)
       case 'deadline':
         return byDate(a.exact_deadline, b.exact_deadline) || tiebreak(a, b)
       case 'opening':

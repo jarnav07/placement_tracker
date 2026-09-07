@@ -44,6 +44,7 @@ onto 177 individual `notes` rows, which destroyed the user's own notes. Do not d
 | --- | --- | --- |
 | **Identity** | `company`, `specific_role` | Set at insert only. Never rewritten by the audit. |
 | **Derived** | `priority_score`, `overall_priority` | The `placements_ranking` trigger. Nothing else, ever. |
+| **Derived** | `opened_at` | The `placements_opening` trigger. Writing it by hand fakes a role being new. |
 | **User-owned** | `app_status`, `date_applied`, `cv_version`, `cover_letter_required`, `referral_contact`, `interview_date`, `notes`, `not_interested`, `archived` | The browser only. |
 | **Researched** | everything else | The audit, only when it established a value. |
 
@@ -62,8 +63,9 @@ Historic failures this table exists to prevent:
 
 ## 4. Database
 
-`public.placements`, 53 columns. The current shape is set by
-`supabase/migrations/20260905120000_schema_cleanup_and_ranking.sql`.
+`public.placements`, 54 columns. The current shape is set by
+`supabase/migrations/20260907120000_opening_automation_and_deadline_priority.sql`
+(on top of `20260905120000_schema_cleanup_and_ranking.sql`).
 
 **Inspect the live schema before changing it.** The TypeScript interface is a mirror, not the
 source of truth.
@@ -100,15 +102,22 @@ sectors `Aerospace & Space` · `Defence` · `Motorsport` · `Engineering & Techn
 
 ## 5. Verification rules
 
-The scheduled verifier is `scripts/azure-placement-audit.mjs` (Azure OpenAI + web search).
-`scripts/placement-verifier.mjs` is the deterministic path used by discovery and by
-`npm run audit`; it is not the scheduled verifier.
+The scheduled pass is `scripts/placement-verification.mjs`. It has three stages and there is
+**exactly one implementation of each** — `scripts/placement-verifier.mjs` (used by discovery
+and `npm run audit`) is a thin adapter over the same modules, not a second copy.
+
+| Stage | Module | What it is |
+| --- | --- | --- |
+| 1. Deterministic | `scripts/verify/evidence.mjs` | Fetches the tracked pages and queries the employer's applicant tracking system for the exact role. Cannot hallucinate. |
+| 2. Primary | `scripts/verify/gemini.mjs` | Gemini, grounded with Google Search and URL context, reasoning over stage 1's evidence. |
+| 3. Secondary | `scripts/verify/azure.mjs` | Azure OpenAI, asked independently when the decision is consequential, contested or low-confidence. |
+| Gate | `scripts/verify/record.mjs` | Combines the three into a status. |
 
 Evidence hierarchy, strongest first:
 
-1. the employer's current exact vacancy page
-2. the employer's student/placement programme page
-3. the employer's ATS listing (Workday, Greenhouse, Lever, Ashby, SmartRecruiters, Taleo…)
+1. the employer's applicant tracking system listing the exact role live (stage 1 — decisive)
+2. the employer's current exact vacancy page
+3. the employer's student/placement programme page
 4. the employer's careers page with an explicit intake or opening statement
 5. a reputable aggregator (Gradcracker, Trackr)
 6. search snippets, social posts, forums
@@ -122,17 +131,35 @@ Hard rules:
   does not mean applications open in September 2026.
 - **A reachable page proves nothing.** Neither does a generic careers page, an "Apply" button
   with no destination, or a stale board hit.
-- **`Open Now` and `Closed` are gated**: ≥ 80 % confidence, exact role found, 2027 intake
-  confirmed, official source, and a real application link. Anything weaker → `Unknown`.
+- **A missing intake year is NOT a contradiction.** Do not re-add a requirement that a posting
+  print "2027". Most postings never do; the previous gate demanded it, so ordinary open
+  placements failed, the answer was discarded, and rows sat at `Not Yet Published`
+  indefinitely. `npm run check` now fails if that requirement comes back.
+- **A live ATS listing of the exact student role opens it**, on its own, even with no printed
+  year. Employers take listings down when a cycle closes.
+- **`Closed` needs corroboration**: a fully enumerated job board that does not list the role,
+  or both providers agreeing. A wrong `Closed` costs the user the placement.
+- **An inconclusive run asserts nothing.** The row keeps its stored status. `Unknown` is
+  written only to clear a standing `Open Now` / `Closed` that today's evidence cannot
+  reproduce. Do not go back to stamping `Unknown` on every unresolved row — that is what made
+  every result invisible.
 - **A verification failure changes nothing.** Record it in `source_verified` and leave the
   researched values alone. Do not stamp `Unknown` because an API call timed out.
-- An unresolved run may clear a stale `Open Now` or `Closed`, but must not clear a stable
-  `Expected` / `Not Yet Published` / `Opening Soon`.
 
 Student opportunities only. Graduate schemes, experienced-hire vacancies, non-degree
 apprenticeships and short summer internships that are not the placement year do not qualify.
 
----
+### Dates and automatic opening
+
+`exact_opening_date` and `exact_deadline` are free text, but they now drive automation, so
+**never write prose into them**. `scripts/verify/dates.mjs` and the SQL functions
+`placement_parse_date()` / `placement_date_precision()` are mirrors of each other; change both
+or neither.
+
+`scripts/apply-scheduled-openings.mjs` sets a placement to `Open Now` on the day its employer
+published as the opening day. It only ever acts on a **day-precision** date. "November 2026" is
+not a promise that applications open on 1 November — month and season dates only make the row
+due for re-verification. Do not loosen that.
 
 ## 6. Discovery
 
@@ -155,22 +182,27 @@ Do not remove the source-page, candidate, concurrency or delay limits without a 
 
 | Workflow | Trigger | Does |
 | --- | --- | --- |
-| `.github/workflows/placement-maintenance.yml` | 16:00 Europe/London daily, plus manual | Discovery, then the Azure audit |
+| `.github/workflows/placement-maintenance.yml` | 16:00 Europe/London daily, plus manual | Discovery, verification, then scheduled openings |
+| `.github/workflows/placement-maintenance.yml` | 07:00 and 12:00 Europe/London | Scheduled openings only (no AI provider, no crawl) |
 | `.github/workflows/deploy-pages.yml` | push to `main`, manual | Build and publish to GitHub Pages |
 | `.github/workflows/ci.yml` | push, pull request | `npm run check` and `npm run build` |
 
-The maintenance schedule fires at 15:00 and 16:00 UTC and a `gate` job keeps whichever is
-16:00 in London. **The gate applies to `schedule` only** — a manual run always proceeds. (The
-previous version gated manual runs too, so `workflow_dispatch` silently did nothing unless it
-happened to be started at exactly 4 PM UK.)
+Each London time fires at both its GMT and its BST hour, and the `gate` job keeps whichever is
+the real London time and decides which mode to run. **The gate applies to `schedule` only** —
+a manual run always proceeds. (An earlier version gated manual runs too, so
+`workflow_dispatch` silently did nothing unless it happened to be started at exactly 4 PM UK.)
 
 Do not casually change the schedule, concurrency (`cancel-in-progress: false` is deliberate)
 or timeout.
 
-Secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `AZURE_OPENAI_ENDPOINT`,
-`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT_NAME`, and `VITE_SUPABASE_URL` /
-`VITE_SUPABASE_ANON_KEY` for the Pages build. Never put a service-role or Azure key in `src/`
-or any `VITE_*` variable. If one is missing, name it — never print its value.
+Secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY` (primary verifier),
+`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT_NAME` (secondary
+verifier), and `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` for the Pages build. Optional
+repository *variable* `GEMINI_MODEL` pins the Gemini model; unset, the verifier picks the
+strongest model the key can reach from the API's model list.
+
+Never put a service-role, Gemini or Azure key in `src/` or any `VITE_*` variable. If one is
+missing, name it — never print its value.
 
 ---
 
@@ -181,7 +213,9 @@ Desktop and mobile are separate presentations over shared logic. Both render the
 
 - `src/App.tsx` — state, realtime, and the **single write path** (`patchPlacement`)
 - `src/lib/filtering.ts` — views, filters, sorting, sector/region derivation
-- `src/lib/ranking.ts` — TypeScript mirror of the Postgres ranking
+- `src/lib/ranking.ts` — TypeScript mirror of the Postgres ranking, plus the "newly opened"
+  rule. The score depends on today's date (the deadline term), so the browser recomputes it
+  live; `priority_score` in Postgres remains the server-side ordering key.
 - `src/components/` — cards, detail panel, filter controls, shared primitives
 - `src/index.css` — **the only place** tokens are defined; no other file declares `:root`
 
