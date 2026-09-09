@@ -463,13 +463,36 @@ async function extract(model, brief, prompt) {
     },
   }
   const { text } = await callGemini(model, body, EXTRACT_TIMEOUT_MS)
+  return parseJsonLoose(text)
+}
+
+/**
+ * Parse a model's JSON answer, tolerating the wrappers models add even when
+ * `responseMimeType: 'application/json'` and a `responseSchema` are set.
+ *
+ * Vertex AI express mode in particular treats the mime type as a hint: it will
+ * happily answer `Here is the JSON: {...}` or fence the object in backticks.
+ * Every call site must use this — a bare `JSON.parse` on a response that is
+ * correct apart from a preamble reads as a broken provider.
+ */
+export function parseJsonLoose(text) {
+  const raw = String(text ?? '').trim()
+  if (!raw) throw new Error('Gemini returned an empty response')
   try {
-    return JSON.parse(text)
+    return JSON.parse(raw)
   } catch {
-    // A model occasionally wraps JSON in a fence despite the mime type.
-    const fenced = text.match(/\{[\s\S]*\}/)
-    if (!fenced) throw new Error('Gemini returned invalid JSON')
-    return JSON.parse(fenced[0])
+    // Prefer a fenced block, then the outermost brace-delimited object.
+    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i)
+    const candidate = fenced ? fenced[1].trim() : null
+    if (candidate) {
+      try { return JSON.parse(candidate) } catch { /* fall through to brace scan */ }
+    }
+    const start = raw.indexOf('{')
+    const end = raw.lastIndexOf('}')
+    if (start === -1 || end <= start) {
+      throw new Error(`Gemini returned invalid JSON: ${raw.slice(0, 80)}`)
+    }
+    return JSON.parse(raw.slice(start, end + 1))
   }
 }
 
@@ -555,8 +578,16 @@ export async function pingGemini() {
         },
       },
     }, EXTRACT_TIMEOUT_MS)
-    JSON.parse(structured.text)
-    steps.push({ step: 'structured output', ok: true, detail: 'responseSchema honoured' })
+    // Parsed the same way the real extraction parses, so the probe cannot fail
+    // over something verification would have handled.
+    const parsed = parseJsonLoose(structured.text)
+    steps.push({
+      step: 'structured output',
+      ok: true,
+      detail: typeof parsed?.summary === 'string'
+        ? 'responseSchema honoured'
+        : 'JSON returned, but not matching the schema exactly',
+    })
 
     return { ok: true, backend: BACKEND, model, steps }
   } catch (error) {

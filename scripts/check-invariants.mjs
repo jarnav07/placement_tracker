@@ -488,6 +488,33 @@ check('an inconclusive run asserts nothing at all',
   decide({ primary: judgement({ proposedStatus: 'Unknown', confidence: 0.4 }) }) === null,
   'the row must keep its stored status rather than being stamped Unknown')
 
+// --- 9c. Model JSON parsing -------------------------------------------------
+// Vertex express mode treats responseMimeType as a hint and will answer
+// "Here is the JSON: {...}". A strict JSON.parse in the provider health check
+// therefore failed the whole nightly pass over a response verification would
+// have handled, so both paths must use the same tolerant parser.
+const { parseJsonLoose } = await import('./verify/gemini.mjs')
+
+for (const [label, payload] of [
+  ['a bare object', '{"summary":"ok"}'],
+  ['a prose preamble', 'Here is the JSON you requested:\n{"summary":"ok"}'],
+  ['a json fence', '```json\n{"summary":"ok"}\n```'],
+  ['a bare fence', '```\n{"summary":"ok"}\n```'],
+  ['trailing prose', 'Sure! {"summary":"ok"} Hope that helps.'],
+]) {
+  let parsed = null
+  try { parsed = parseJsonLoose(payload) } catch { /* reported below */ }
+  check(`model JSON parser handles ${label}`, parsed?.summary === 'ok')
+}
+for (const [label, payload] of [['empty output', '   '], ['no object at all', 'no json here']]) {
+  let threw = false
+  try { parseJsonLoose(payload) } catch { threw = true }
+  check(`model JSON parser still rejects ${label}`, threw)
+}
+check('the provider health check uses the tolerant parser, not a bare JSON.parse',
+  gemini.includes('parseJsonLoose(structured.text)') && !/\n\s*JSON\.parse\(structured\.text\)/.test(gemini),
+  'a strict parse here silently disables every nightly verification run')
+
 // --- Result -----------------------------------------------------------------
 
 if (failures.length) {
