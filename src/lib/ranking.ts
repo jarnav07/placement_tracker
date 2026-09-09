@@ -128,23 +128,24 @@ export function priorityOf(p: Placement, now = Date.now()): OverallPriority {
 
 // --- Newly opened ----------------------------------------------------------
 
-/** How long a placement wears the "new" mark after its applications open. */
-export const NEW_FOR_DAYS = 10
-
 /**
- * True when this placement's applications opened recently.
+ * True only on the calendar day on which this placement's applications opened.
  *
  * `opened_at` is stamped by the `placements_opening` Postgres trigger the moment
- * `application_status` becomes "Open Now", so this is the real opening moment
- * rather than "when the row was last edited". Roles already open before the
- * trigger existed have no `opened_at` and correctly never show as new.
+ * `application_status` becomes "Open Now". The New badge is intentionally a
+ * same-calendar-day marker, not a rolling 10-day window: a role opened yesterday
+ * or earlier must never continue to appear as New.
  */
 export function isNewlyOpened(p: Pick<Placement, 'opened_at' | 'application_status'>, now = Date.now()): boolean {
   if (p.application_status !== 'Open Now' || !p.opened_at) return false
   const at = Date.parse(p.opened_at)
   if (Number.isNaN(at)) return false
-  const age = (now - at) / 86_400_000
-  return age >= 0 && age <= NEW_FOR_DAYS
+
+  const opened = new Date(at)
+  const current = new Date(now)
+  return opened.getFullYear() === current.getFullYear()
+    && opened.getMonth() === current.getMonth()
+    && opened.getDate() === current.getDate()
 }
 
 /** "Opened today" / "Opened 3 days ago", for the marker's tooltip. */
