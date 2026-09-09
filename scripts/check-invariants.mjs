@@ -568,6 +568,26 @@ for (const file of CLIENT_SCRIPTS) {
     'a local createClient can miss the REST-endpoint guard')
 }
 
+// --- 9e. Response schema and evidence honesty -------------------------------
+// Vertex rejects an empty enum member outright — the whole request fails with
+// "response_schema.properties[deadline_type].enum[4]: cannot be empty", which
+// showed up as three roles failing verification for no visible reason.
+const recordSource = read('scripts/verify/record.mjs')
+check('no response-schema enum contains an empty member',
+  !/enum: \[\.\.\.[A-Z_]+, ''\]/.test(recordSource) && !/enum: \[[^\]]*''[^\]]*\]/.test(recordSource),
+  'Vertex rejects the entire request, so every role using that schema fails')
+
+// The trail's whole job is explaining the stored status, so it must be built
+// from the status actually written. It used to report the decision, which read
+// "no change (kept Open Now)" on a row the same update demoted to "Unknown".
+check('the evidence trail is built from the status actually stored',
+  verification.includes('evidenceTrail(role, outcome, update.application_status ?? role.application_status)')
+  && verification.includes('function evidenceTrail(role, outcome, finalStatus)'),
+  'a trail that contradicts its own row is worse than no trail')
+check('the trail is written after the status is settled',
+  verification.indexOf('update.source_verified = evidenceTrail') > verification.indexOf("update.application_status = 'Unknown'"),
+  'building it earlier is what let the two disagree')
+
 // --- Result -----------------------------------------------------------------
 
 if (failures.length) {

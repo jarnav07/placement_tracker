@@ -158,7 +158,7 @@ async function verifyRole(role) {
 // Write-back
 // ---------------------------------------------------------------------------
 
-function evidenceTrail(role, outcome) {
+function evidenceTrail(role, outcome, finalStatus) {
   const { verdict, primary, secondary, decision, secondOpinion } = outcome
   const providers = [
     primary.ok ? `Gemini ${primary.model}` : `Gemini unavailable (${primary.error})`,
@@ -178,9 +178,17 @@ function evidenceTrail(role, outcome) {
     return true
   }).slice(0, 8)
 
+  // Report the status that is actually being stored. Reporting the decision
+  // instead let the trail read "no change (kept Open Now)" on a row the very
+  // same update was demoting to "Unknown".
+  const headline = decision.status
+    ? `${decision.status} · ${Math.round(decision.confidence * 100)}% confidence`
+    : finalStatus === role.application_status
+      ? `no change (kept ${role.application_status})`
+      : `${finalStatus} — nothing could be established today, and "${role.application_status}" is too time-sensitive to stand unverified`
+
   return [
-    `Verification ${TODAY}: ${decision.status ?? `no change (kept ${role.application_status})`}`
-      + `${decision.status ? ` · ${Math.round(decision.confidence * 100)}% confidence` : ''}.`,
+    `Verification ${TODAY}: ${headline}.`,
     `Providers: ${providers.join(' · ')}.`,
     `Deterministic check: ${verdict.status ?? 'no assertion'}. ${verdict.reason}`,
     // The decision often just restates the deterministic reason; do not print it twice.
@@ -199,10 +207,7 @@ function evidenceTrail(role, outcome) {
  */
 function buildUpdate(role, outcome) {
   const { record, decision, verdict } = outcome
-  const update = {
-    source_date_checked: TODAY,
-    source_verified: evidenceTrail(role, outcome),
-  }
+  const update = { source_date_checked: TODAY }
 
   for (const field of RESEARCHED_FIELDS) {
     if (field === 'application_status') continue
@@ -230,6 +235,9 @@ function buildUpdate(role, outcome) {
   }
 
   if (!role.start_year) update.start_year = TARGET_YEAR
+
+  // Written last, so it can describe the status this update actually stores.
+  update.source_verified = evidenceTrail(role, outcome, update.application_status ?? role.application_status)
   return update
 }
 

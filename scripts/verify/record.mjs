@@ -82,7 +82,11 @@ export function buildSchema() {
     placement_duration: text, placement_start_date: text, placement_end_date: text,
     application_status: { type: 'string', enum: STATES },
     exact_opening_date: text, exact_deadline: text,
-    deadline_type: { type: 'string', enum: [...DEADLINE_TYPES, ''] },
+    // No empty member: Vertex rejects the whole request with
+    // "response_schema.properties[deadline_type].enum[4]: cannot be empty".
+    // "TBC" already carries "not established", and normalisation below coerces
+    // anything unrecognised, so nothing is lost by removing the empty option.
+    deadline_type: { type: 'string', enum: DEADLINE_TYPES },
     website: text, careers_page: text, application_link: text,
     degree_requirements: text, min_grade_requirement: text, year_of_study_requirement: text,
     required_technical_skills: text, work_eligibility: text, security_clearance_requirement: text,
