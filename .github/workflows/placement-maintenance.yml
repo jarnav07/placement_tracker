@@ -22,7 +22,7 @@ on:
         description: Which steps to run
         type: choice
         default: discover-and-verify
-        options: [discover-and-verify, verify-only, discover-only, openings-only]
+        options: [discover-and-verify, verify-only, discover-only, openings-only, providers-only]
       limit:
         description: 'Verify at most N roles (0 = all). Highest-value roles first.'
         type: string
@@ -72,6 +72,45 @@ jobs:
 
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "London time is $(TZ=Europe/London date '+%Y-%m-%d %H:%M %Z') — mode '$MODE'."
+
+  # Proves the verification keys actually work, and nothing else. Cheap enough to
+  # run on demand: a few hundred tokens and under a minute. Use it after changing
+  # a key, rather than discovering the problem in the middle of a nightly pass.
+  providers:
+    needs: gate
+    if: needs.gate.outputs.mode == 'providers-only'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      VERTEX_API_KEY: ${{ secrets.VERTEX_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_BACKEND: ${{ vars.GEMINI_BACKEND }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+      AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Report which keys are present
+        run: |
+          echo "VERTEX_API_KEY:               ${VERTEX_API_KEY:+set}${VERTEX_API_KEY:-NOT SET}"
+          echo "GEMINI_API_KEY:               ${GEMINI_API_KEY:+set}${GEMINI_API_KEY:-NOT SET}"
+          echo "AZURE_OPENAI_API_KEY:         ${AZURE_OPENAI_API_KEY:+set}${AZURE_OPENAI_API_KEY:-NOT SET}"
+          echo "AZURE_OPENAI_ENDPOINT:        ${AZURE_OPENAI_ENDPOINT:+set}${AZURE_OPENAI_ENDPOINT:-NOT SET}"
+          echo "AZURE_OPENAI_DEPLOYMENT_NAME: ${AZURE_OPENAI_DEPLOYMENT_NAME:+set}${AZURE_OPENAI_DEPLOYMENT_NAME:-NOT SET}"
+          echo "GEMINI_BACKEND (variable):    ${GEMINI_BACKEND:-unset}"
+          echo "GEMINI_MODEL (variable):      ${GEMINI_MODEL:-unset}"
+
+      - name: Test the verification providers
+        run: npm run check:providers
 
   # Flips placements whose employer published today as the day applications open.
   # Deliberately separate from `maintain`: it needs no AI provider and no crawl,
