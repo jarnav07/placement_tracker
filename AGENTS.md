@@ -109,7 +109,7 @@ and `npm run audit`) is a thin adapter over the same modules, not a second copy.
 | Stage | Module | What it is |
 | --- | --- | --- |
 | 1. Deterministic | `scripts/verify/evidence.mjs` | Fetches the tracked pages and queries the employer's applicant tracking system for the exact role. Cannot hallucinate. |
-| 2. Primary | `scripts/verify/gemini.mjs` | Gemini, grounded with Google Search and URL context, reasoning over stage 1's evidence. |
+| 2. Primary | `scripts/verify/gemini.mjs` | Gemini, grounded with Google Search and URL context, reasoning over stage 1's evidence. Runs against Vertex AI or AI Studio — same models, different endpoint and key. |
 | 3. Secondary | `scripts/verify/azure.mjs` | Azure OpenAI, asked independently when the decision is consequential, contested or low-confidence. |
 | Gate | `scripts/verify/record.mjs` | Combines the three into a status. |
 
@@ -195,14 +195,24 @@ a manual run always proceeds. (An earlier version gated manual runs too, so
 Do not casually change the schedule, concurrency (`cancel-in-progress: false` is deliberate)
 or timeout.
 
-Secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY` (primary verifier),
-`AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT_NAME` (secondary
-verifier), and `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` for the Pages build. Optional
-repository *variable* `GEMINI_MODEL` pins the Gemini model; unset, the verifier picks the
-strongest model the key can reach from the API's model list.
+Secrets: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, either `VERTEX_API_KEY` or
+`GEMINI_API_KEY` (primary verifier — exactly one), `AZURE_OPENAI_ENDPOINT`,
+`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT_NAME` (secondary verifier), and
+`VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` for the Pages build. Optional repository
+*variables*: `GEMINI_BACKEND` (`vertex` | `aistudio`) and `GEMINI_MODEL`.
 
-Never put a service-role, Gemini or Azure key in `src/` or any `VITE_*` variable. If one is
-missing, name it — never print its value.
+**Vertex AI needs an express-mode key.** A plain Google Cloud API key is refused by
+`aiplatform.googleapis.com` with "API keys are not supported by this API" even when the Vertex
+AI API is enabled — that error means the wrong KIND of key, not a bad one. Express mode takes
+no project id and no location; a project-scoped Vertex endpoint would need OAuth credentials,
+which an API key cannot provide. Do not add project/location handling and expect a key to work.
+
+`npm run check:providers` exercises authentication, the Google Search grounding tool and
+structured output against whichever backend is configured. Run it before assuming a key is
+broken, and before changing provider code.
+
+Never put a service-role, Gemini, Vertex or Azure key in `src/` or any `VITE_*` variable. If one
+is missing, name it — never print its value.
 
 ---
 

@@ -15,6 +15,7 @@
 //  9. The availability gate does not go back to demanding a printed intake year.
 
 import fs from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { looksLikeStudentRole, classifyOpportunity } from './role-quality.mjs'
 import { parseDateText, toIsoDate, openingHasArrived, openingIsDue, daysUntil } from './verify/dates.mjs'
 import { openingDecision } from './apply-scheduled-openings.mjs'
@@ -310,6 +311,51 @@ check('Azure is still consulted as the secondary provider',
   verification.includes('verifyWithAzure') && read('scripts/verify/azure.mjs').includes('SECONDARY verification provider'))
 check('Gemini is the primary provider',
   verification.includes('verifyWithGemini') && read('scripts/verify/gemini.mjs').includes('PRIMARY verification provider'))
+// --- 9b. Gemini backends ----------------------------------------------------
+//
+// Vertex AI and AI Studio reach the same models through different endpoints and
+// key types, and the failure mode when they are mixed up is a nightly run that
+// verifies nothing. These pin the parts that are easy to get subtly wrong.
+
+const gemini = read('scripts/verify/gemini.mjs')
+
+check('Vertex uses the global express-mode endpoint at the version Google\'s own SDK uses',
+  gemini.includes("const VERTEX_ROOT = 'https://aiplatform.googleapis.com/v1beta1'")
+  && gemini.includes('publishers/google/models/${encodeURIComponent(model)}:generateContent'),
+  'express mode is global: it takes no project id and no location')
+check('AI Studio keeps its own endpoint',
+  gemini.includes("const AISTUDIO_ROOT = 'https://generativelanguage.googleapis.com/v1beta'"))
+check('both backends send the key as a header, never in the URL',
+  !/generateUrl:[^\n]*\bkey=/.test(gemini) && (gemini.match(/'x-goog-api-key'/g) ?? []).length >= 2,
+  'a key in a query string can reach a log')
+check('a Vertex key rejection explains that express mode is the requirement',
+  gemini.includes('API keys are not supported by this API') && gemini.includes('express mode'),
+  'that error means the wrong KIND of key, not a malformed one')
+check('the provider self-test exercises auth, grounding and structured output',
+  read('scripts/check-providers.mjs').includes('pingGemini')
+  && gemini.includes('export async function pingGemini'))
+
+/** Backend selection is env-driven, so it is checked in a real child process. */
+function backendFor(env) {
+  const result = spawnSync(process.execPath, [
+    '--input-type=module',
+    '-e', "const m = await import('./scripts/verify/gemini.mjs'); process.stdout.write(m.geminiBackend)",
+  ], { env: { ...process.env, VERTEX_API_KEY: '', GEMINI_API_KEY: '', GEMINI_BACKEND: '', GOOGLE_GENAI_USE_VERTEXAI: '', GOOGLE_API_KEY: '', GOOGLE_VERTEX_API_KEY: '', GOOGLE_CLOUD_API_KEY: '', ...env }, encoding: 'utf8' })
+  return result.stdout?.trim()
+}
+
+const BACKEND_CASES = [
+  [{ VERTEX_API_KEY: 'k' }, 'vertex', 'a Vertex key selects Vertex'],
+  [{ GEMINI_API_KEY: 'k' }, 'aistudio', 'an AI Studio key selects AI Studio'],
+  [{ VERTEX_API_KEY: 'k', GEMINI_API_KEY: 'k' }, 'vertex', 'Vertex wins when both keys are set'],
+  [{ VERTEX_API_KEY: 'k', GEMINI_API_KEY: 'k', GEMINI_BACKEND: 'aistudio' }, 'aistudio', 'GEMINI_BACKEND overrides'],
+  [{ GEMINI_API_KEY: 'k', GOOGLE_GENAI_USE_VERTEXAI: 'true' }, 'vertex', "Google's own SDK variable is honoured"],
+  [{}, 'none', 'no key selects no backend'],
+]
+for (const [env, expected, why] of BACKEND_CASES) {
+  check(`backend selection: ${why}`, backendFor(env) === expected, `got ${backendFor(env)}`)
+}
+
 check('the deterministic evidence stage has exactly one implementation',
   read('scripts/placement-verifier.mjs').includes("from './verify/evidence.mjs'")
   && verification.includes("from './verify/evidence.mjs'"),

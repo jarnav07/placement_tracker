@@ -117,8 +117,14 @@ jobs:
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      # PRIMARY verification provider.
+      # PRIMARY verification provider. Set ONE of these two keys:
+      #   VERTEX_API_KEY  — Vertex AI in express mode (aiplatform.googleapis.com)
+      #   GEMINI_API_KEY  — the Gemini Developer API / AI Studio
+      # Same models either way; only the endpoint and the key differ. If both are
+      # present, Vertex wins unless GEMINI_BACKEND says otherwise.
+      VERTEX_API_KEY: ${{ secrets.VERTEX_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_BACKEND: ${{ vars.GEMINI_BACKEND }}
       GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
       # SECONDARY verification provider, consulted on contested or consequential
       # decisions. Keeping it is deliberate: two independent providers must agree
@@ -141,12 +147,18 @@ jobs:
       - name: Check required secrets
         run: |
           missing=""
-          for name in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY GEMINI_API_KEY; do
+          for name in SUPABASE_URL SUPABASE_SERVICE_ROLE_KEY; do
             [ -n "${!name}" ] || missing="$missing $name"
           done
           if [ -n "$missing" ]; then
             echo "::error::Missing repository secrets:$missing"
-            echo "::error::GEMINI_API_KEY is the primary verifier. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+          # The primary verifier needs exactly one Gemini key, either backend.
+          if [ -z "$VERTEX_API_KEY" ] && [ -z "$GEMINI_API_KEY" ]; then
+            echo "::error::No primary verifier key. Add VERTEX_API_KEY (Vertex AI express mode) or GEMINI_API_KEY (AI Studio)"
+            echo "::error::under Settings → Secrets and variables → Actions."
             exit 1
           fi
 
@@ -158,6 +170,12 @@ jobs:
               echo "::warning::$name is not set — running without the Azure second opinion."
             fi
           done
+
+      # Proves the key actually works before spending a few hundred calls finding
+      # out that it does not. Costs a few hundred tokens.
+      - name: Check the verification providers
+        if: env.MODE != 'discover-only'
+        run: npm run check:providers
 
       # Deterministic crawl of career pages already tracked. Only links whose own
       # label and URL read as a student vacancy become candidates, and each one is

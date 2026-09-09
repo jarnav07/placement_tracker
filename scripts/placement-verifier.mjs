@@ -21,13 +21,13 @@ import {
   gatherEvidence, deterministicVerdict, TODAY, TARGET_INTAKE, STUDENT_TERM_RE,
 } from './verify/evidence.mjs'
 import { decideStatus, needsSecondOpinion, mergeRecords, TARGET_YEAR } from './verify/record.mjs'
-import { verifyWithGemini, geminiApiKey } from './verify/gemini.mjs'
+import { verifyWithGemini, geminiConfigured } from './verify/gemini.mjs'
 import { verifyWithAzure, azureConfigured } from './verify/azure.mjs'
 
 const env = name => (process.env[name] || '').trim().replace(/^['"]|['"]$/g, '')
 
 /** Providers are opt-in so discovery can run deterministically and for free. */
-export const useGemini = env('USE_GEMINI') !== 'false' && Boolean(geminiApiKey)
+export const useGemini = env('USE_GEMINI') !== 'false' && geminiConfigured
 export const useAzure = env('USE_AZURE') === 'true' && azureConfigured
 
 /**

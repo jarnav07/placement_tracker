@@ -14,19 +14,137 @@
 //     0, and the extraction pass is told it may not add anything the research
 //     pass did not establish.
 //
-// The model is resolved at runtime from the API's own model list, so a
-// deprecation (Gemini model IDs turn over every few months) degrades to the next
-// best available model instead of failing the nightly run. GEMINI_MODEL pins it.
+// The model is resolved at runtime rather than hardcoded, so a deprecation
+// (Gemini model IDs turn over every few months) degrades to the next best
+// available model instead of failing the nightly run. GEMINI_MODEL pins it.
 
 import { buildSchema, normaliseRecord } from './record.mjs'
 import { describeEvidence, evidencePageText, TARGET_INTAKE } from './evidence.mjs'
 
-const API_ROOT = 'https://generativelanguage.googleapis.com/v1beta'
-
 const env = name => (process.env[name] || '').trim().replace(/^['"]|['"]$/g, '')
 
-export const geminiApiKey = env('GEMINI_API_KEY') || env('GOOGLE_API_KEY')
+// ---------------------------------------------------------------------------
+// Backend
+// ---------------------------------------------------------------------------
+//
+// The same Gemini models are reachable two ways, and the request body is
+// identical for both. Only the URL and how the key travels differ.
+//
+//   vertex    Vertex AI in express mode. A Vertex API key against the global
+//             endpoint, which takes no project or location in the path.
+//             POST https://aiplatform.googleapis.com/v1beta1/publishers/google/models/MODEL:generateContent
+//
+//   aistudio  The Gemini Developer API (AI Studio key).
+//             POST https://generativelanguage.googleapis.com/v1beta/models/MODEL:generateContent
+//
+// Both carry the key in an `x-goog-api-key` header. That is not a guess: it is
+// exactly what Google's own @google/genai SDK builds for each case (its "Vertex
+// Express or global endpoint" branch, at API version v1beta1). Keeping the key
+// in a header rather than a `?key=` query parameter also keeps it out of any URL
+// that might reach a log.
+//
+// Vertex is not the same product as a plain Google Cloud project: EXPRESS MODE is
+// what makes an API key sufficient. `aiplatform.googleapis.com` rejects API keys
+// outright for projects without it, with "API keys are not supported by this
+// API". A standard project endpoint (LOCATION-aiplatform.googleapis.com/v1/
+// projects/…) needs an OAuth token from service-account credentials, which an API
+// key cannot provide — so if project details are configured, `describeBackend`
+// says plainly that they are not used, and `npm run check:providers` reports
+// which backend actually works before a nightly run depends on it.
+
+const VERTEX_ROOT = 'https://aiplatform.googleapis.com/v1beta1'
+const AISTUDIO_ROOT = 'https://generativelanguage.googleapis.com/v1beta'
+
+const vertexKey = env('VERTEX_API_KEY') || env('GOOGLE_VERTEX_API_KEY') || env('GOOGLE_CLOUD_API_KEY')
+const studioKey = env('GEMINI_API_KEY') || env('GOOGLE_API_KEY')
+
+/** Explicit wins; otherwise whichever key is present, preferring Vertex. */
+function chooseBackend() {
+  const explicit = env('GEMINI_BACKEND').toLowerCase()
+  if (explicit === 'vertex' || explicit === 'aistudio') return explicit
+  // Google's own SDK convention, honoured so a familiar setting does what it says.
+  if (env('GOOGLE_GENAI_USE_VERTEXAI').toLowerCase() === 'true') return 'vertex'
+  if (vertexKey) return 'vertex'
+  if (studioKey) return 'aistudio'
+  return 'none'
+}
+
+const BACKEND = chooseBackend()
+
+const BACKENDS = {
+  vertex: {
+    label: 'Vertex AI (express mode)',
+    key: vertexKey,
+    generateUrl: model => `${VERTEX_ROOT}/publishers/google/models/${encodeURIComponent(model)}:generateContent`,
+    listUrl: () => `${VERTEX_ROOT}/publishers/google/models`,
+    headers: () => ({ 'x-goog-api-key': vertexKey }),
+  },
+  aistudio: {
+    label: 'Gemini API (AI Studio)',
+    key: studioKey,
+    generateUrl: model => `${AISTUDIO_ROOT}/models/${encodeURIComponent(model)}:generateContent`,
+    listUrl: () => `${AISTUDIO_ROOT}/models?pageSize=200`,
+    headers: () => ({ 'x-goog-api-key': studioKey }),
+  },
+}
+
+const backend = BACKENDS[BACKEND] ?? null
+
+export const geminiConfigured = Boolean(backend?.key)
+export const geminiBackend = BACKEND
 export const geminiModelOverride = env('GEMINI_MODEL')
+
+/** One line for logs and for `npm run check:providers`. Never prints the key. */
+export function describeBackend() {
+  if (!geminiConfigured) {
+    return 'Gemini: not configured (set VERTEX_API_KEY for Vertex AI, or GEMINI_API_KEY for AI Studio)'
+  }
+  const notes = []
+  if (BACKEND === 'vertex' && (env('VERTEX_PROJECT_ID') || env('GOOGLE_CLOUD_PROJECT'))) {
+    notes.push('a project id is set but unused — express mode takes no project or location,'
+      + ' and a project-scoped Vertex endpoint would need OAuth credentials rather than an API key')
+  }
+  if (vertexKey && studioKey) {
+    notes.push(`both keys are set; using ${BACKENDS[BACKEND].label}. Set GEMINI_BACKEND to choose explicitly`)
+  }
+  return `Gemini: ${backend.label}${geminiModelOverride ? `, model pinned to ${geminiModelOverride}` : ''}`
+    + (notes.length ? ` (${notes.join('; ')})` : '')
+}
+
+/**
+ * Turns the API's own error into something actionable.
+ *
+ * The message that matters most is Vertex's "API keys are not supported by this
+ * API": it does NOT mean the key is malformed, it means the key's project has no
+ * express mode, so aiplatform.googleapis.com will not accept an API key from it
+ * at all. Without this note that error reads like a bad key and sends you off to
+ * regenerate a perfectly good one.
+ */
+export function explainGeminiError(message = '') {
+  if (/API keys are not supported by this API/i.test(message)) {
+    return BACKEND === 'vertex'
+      ? 'This key is not enabled for Vertex AI in express mode. Express mode is what lets Vertex accept'
+        + ' an API key at all — a plain Google Cloud API key is refused here even with the Vertex AI API'
+        + ' enabled. Either enable express mode for the project and use the key it issues, or switch to an'
+        + ' AI Studio key in GEMINI_API_KEY (the same models, keyed differently).'
+      : 'This endpoint refused API-key authentication, which usually means the wrong backend is selected.'
+  }
+  if (/API key not valid/i.test(message)) {
+    return BACKEND === 'vertex'
+      ? 'The key was rejected. An AI Studio key placed in VERTEX_API_KEY produces this — put it in GEMINI_API_KEY instead.'
+      : 'The key was rejected. Check it at https://aistudio.google.com/apikey, or set VERTEX_API_KEY if it is a Vertex key.'
+  }
+  if (/quota|rate limit|RESOURCE_EXHAUSTED/i.test(message)) {
+    return 'Quota exhausted for this key. Raise the quota, or pin a cheaper model with GEMINI_MODEL (e.g. gemini-2.5-flash).'
+  }
+  if (/permission|PERMISSION_DENIED|has not been used|is disabled/i.test(message)) {
+    return 'The API is not enabled for this key\'s project, or the key is restricted. Check the key\'s API restrictions.'
+  }
+  if (MODEL_MISSING_RE.test(message)) {
+    return 'That model is not available on this backend. Pin a current one with the GEMINI_MODEL variable.'
+  }
+  return ''
+}
 
 const RESEARCH_TIMEOUT_MS = 180000
 const EXTRACT_TIMEOUT_MS = 90000
@@ -41,7 +159,9 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 /** Ranks a model id: capability tier first (accuracy is the point), then version. */
 function rankModel(id) {
-  const name = id.replace(/^models\//, '')
+  // AI Studio returns "models/gemini-2.5-pro"; Vertex returns
+  // "publishers/google/models/gemini-2.5-pro".
+  const name = id.replace(/^.*models\//, '')
   if (!/^gemini-/.test(name)) return null
   // Anything that is not a general text model, or is explicitly experimental.
   if (/embedding|aqa|tts|image|video|audio|live|native-audio|imagen|veo|learnlm|gemma/.test(name)) return null
@@ -58,42 +178,84 @@ function rankModel(id) {
   return { name, tier, version, stable }
 }
 
+/**
+ * Tried in order when the backend exposes no model list — which is the normal
+ * case for Vertex AI express mode. Documented as supporting Google Search
+ * grounding, strongest first. A model that has been retired answers 404 and the
+ * next one is tried, so a deprecation costs one wasted request, not the run.
+ *
+ * This list is a floor, not a ceiling: pin a newer model with GEMINI_MODEL and
+ * nothing here is consulted at all.
+ */
+const MODEL_CANDIDATES = ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite']
+
 let resolvedModel = null
+let candidateCursor = 0
 
 /**
  * Picks the strongest available model. Preference is capability tier (pro over
  * flash) then version, because a wrong availability call costs the user a role
  * and the run is only a few hundred requests a day.
+ *
+ * AI Studio publishes a model list, so it is used. Vertex express mode does not
+ * reliably expose one — the call is still attempted, and the candidate list is
+ * the fallback.
  */
-export async function resolveModel(apiKey = geminiApiKey) {
+export async function resolveModel() {
   if (geminiModelOverride) return geminiModelOverride
   if (resolvedModel) return resolvedModel
+  if (!backend) throw new Error('No Gemini backend configured')
 
   try {
-    const response = await fetch(`${API_ROOT}/models?pageSize=200`, {
-      headers: { 'x-goog-api-key': apiKey },
+    const response = await fetch(backend.listUrl(), {
+      headers: backend.headers(),
       signal: AbortSignal.timeout(30000),
     })
     if (response.ok) {
       const body = await response.json()
-      const usable = (body?.models ?? [])
-        .filter(model => (model?.supportedGenerationMethods ?? []).includes('generateContent'))
-        .map(model => rankModel(String(model?.name ?? '')))
+      const listed = body?.models ?? body?.publisherModels ?? []
+      const usable = listed
+        // AI Studio reports which methods a model supports; Vertex does not, so
+        // absence of the field is not a reason to discard a model.
+        .filter(model => {
+          const methods = model?.supportedGenerationMethods
+          return !Array.isArray(methods) || methods.includes('generateContent')
+        })
+        .map(model => rankModel(String(model?.name ?? model?.versionId ?? '')))
         .filter(Boolean)
         .sort((a, b) => b.tier - a.tier || b.version - a.version || b.stable - a.stable)
       if (usable.length) {
         resolvedModel = usable[0].name
-        console.log(`Gemini model resolved from the API model list: ${resolvedModel}`)
+        console.log(`Gemini model resolved from the ${backend.label} model list: ${resolvedModel}`)
         return resolvedModel
       }
     }
-    console.warn(`Gemini model list unavailable (HTTP ${response.status}); falling back to gemini-2.5-pro.`)
+    console.log(`${backend.label} publishes no usable model list (HTTP ${response.status});`
+      + ` trying known models in order, starting with ${MODEL_CANDIDATES[0]}.`)
   } catch (error) {
-    console.warn(`Gemini model list could not be read (${error?.message ?? error}); falling back to gemini-2.5-pro.`)
+    console.warn(`Could not read the ${backend.label} model list (${error?.message ?? error});`
+      + ` trying known models in order, starting with ${MODEL_CANDIDATES[0]}.`)
   }
-  resolvedModel = 'gemini-2.5-pro'
+  resolvedModel = MODEL_CANDIDATES[candidateCursor]
   return resolvedModel
 }
+
+/**
+ * Called when a model answers "not found". Advances to the next candidate and
+ * reports whether one was left, so a retired model degrades the run instead of
+ * ending it.
+ */
+function demoteModel(model) {
+  if (geminiModelOverride) return null
+  const index = MODEL_CANDIDATES.indexOf(model)
+  if (index === -1 || index + 1 >= MODEL_CANDIDATES.length) return null
+  candidateCursor = index + 1
+  resolvedModel = MODEL_CANDIDATES[candidateCursor]
+  console.warn(`${model} is not available on this backend — falling back to ${resolvedModel} for the rest of the run.`)
+  return resolvedModel
+}
+
+const MODEL_MISSING_RE = /not found|was not found|is not supported|does not exist|unsupported model|invalid model|no such model|not allowed to use/i
 
 // ---------------------------------------------------------------------------
 // Prompts
@@ -178,17 +340,17 @@ function rolePrompt(role, evidence, verdict) {
 // API calls
 // ---------------------------------------------------------------------------
 
-async function callGemini(model, body, timeoutMs, apiKey) {
+async function callGemini(model, body, timeoutMs) {
   let lastError = null
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
-      const response = await fetch(`${API_ROOT}/models/${encodeURIComponent(model)}:generateContent`, {
+      const response = await fetch(backend.generateUrl(model), {
         method: 'POST',
         signal: controller.signal,
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        headers: { 'Content-Type': 'application/json', ...backend.headers() },
         body: JSON.stringify(body),
       })
       const parsed = await response.json().catch(() => null)
@@ -202,6 +364,12 @@ async function callGemini(model, body, timeoutMs, apiKey) {
           await sleep(backoff)
           lastError = message
           continue
+        }
+        // A retired or unavailable model: move to the next candidate and retry
+        // once, so a deprecation costs one request rather than the whole run.
+        if ((response.status === 404 || response.status === 400) && MODEL_MISSING_RE.test(message)) {
+          const next = demoteModel(model)
+          if (next) return callGemini(next, body, timeoutMs)
         }
         const error = new Error(message)
         error.status = response.status
@@ -241,27 +409,37 @@ async function callGemini(model, body, timeoutMs, apiKey) {
  * directly; not every model exposes it, so a rejection retries with search alone
  * rather than failing the row.
  */
-async function research(model, prompt, apiKey) {
+let urlContextSupported = true
+
+async function research(model, prompt) {
   const base = {
     systemInstruction: { parts: [{ text: RESEARCH_SYSTEM }] },
     contents: [{ role: 'user', parts: [{ text: prompt }] }],
     generationConfig: { temperature: 0, maxOutputTokens: 4096 },
   }
+  // `google_search` is the current tool name on both backends. (Older models
+  // used `google_search_retrieval`; none of the models here need it.)
+  const searchOnly = { ...base, tools: [{ google_search: {} }] }
+
+  if (!urlContextSupported) return callGemini(model, searchOnly, RESEARCH_TIMEOUT_MS)
 
   try {
-    return await callGemini(model, { ...base, tools: [{ google_search: {} }, { url_context: {} }] }, RESEARCH_TIMEOUT_MS, apiKey)
+    return await callGemini(model, { ...base, tools: [{ google_search: {} }, { url_context: {} }] }, RESEARCH_TIMEOUT_MS)
   } catch (error) {
     const message = error?.message ?? ''
-    if (error?.status === 400 && /url_context|tool|unsupported|unknown name/i.test(message)) {
-      console.warn('  gemini: url_context not supported by this model — retrying with Google Search only.')
-      return callGemini(model, { ...base, tools: [{ google_search: {} }] }, RESEARCH_TIMEOUT_MS, apiKey)
+    if (error?.status === 400 && /url_context|tool|unsupported|unknown|not supported|invalid/i.test(message)) {
+      // Remembered for the rest of the run: one probe per run, not per role.
+      urlContextSupported = false
+      console.warn(`  gemini: url_context is not available on ${backend.label} for this model`
+        + ' — continuing with Google Search grounding alone for the rest of the run.')
+      return callGemini(model, searchOnly, RESEARCH_TIMEOUT_MS)
     }
     throw error
   }
 }
 
 /** Pass 2: tool-free extraction into the shared strict record schema. */
-async function extract(model, brief, prompt, apiKey) {
+async function extract(model, brief, prompt) {
   const body = {
     systemInstruction: { parts: [{ text: EXTRACT_SYSTEM }] },
     contents: [{
@@ -284,7 +462,7 @@ async function extract(model, brief, prompt, apiKey) {
       responseSchema: buildSchema(),
     },
   }
-  const { text } = await callGemini(model, body, EXTRACT_TIMEOUT_MS, apiKey)
+  const { text } = await callGemini(model, body, EXTRACT_TIMEOUT_MS)
   try {
     return JSON.parse(text)
   } catch {
@@ -308,14 +486,20 @@ function groundingSources(grounding) {
  * Verifies one role. Returns `{ ok, record, judgement, brief, error }`.
  * A failure never mutates anything — the caller keeps the stored values.
  */
-export async function verifyWithGemini(role, evidence, verdict, apiKey = geminiApiKey) {
-  if (!apiKey) return { ok: false, provider: 'Gemini', error: 'GEMINI_API_KEY is not set' }
+export async function verifyWithGemini(role, evidence, verdict) {
+  if (!geminiConfigured) {
+    return {
+      ok: false,
+      provider: 'Gemini',
+      error: 'no Gemini key configured — set VERTEX_API_KEY (Vertex AI) or GEMINI_API_KEY (AI Studio)',
+    }
+  }
 
   try {
-    const model = await resolveModel(apiKey)
+    const model = await resolveModel()
     const prompt = rolePrompt(role, evidence, verdict)
-    const { text: brief, grounding } = await research(model, prompt, apiKey)
-    const raw = await extract(model, brief, prompt, apiKey)
+    const { text: brief, grounding } = await research(model, prompt)
+    const raw = await extract(model, brief, prompt)
     const { record, judgement } = normaliseRecord(raw, 'Gemini')
 
     const cited = groundingSources(grounding)
@@ -331,5 +515,51 @@ export async function verifyWithGemini(role, evidence, verdict, apiKey = geminiA
     return { ok: true, provider: 'Gemini', model, record, judgement, brief }
   } catch (error) {
     return { ok: false, provider: 'Gemini', error: error?.message ?? String(error) }
+  }
+}
+
+/**
+ * One cheap end-to-end probe of the configured backend, used by
+ * `npm run check:providers`. It exercises the three things that actually break
+ * when a key or a backend is wrong — authentication, the Google Search grounding
+ * tool, and structured output — rather than only checking that a key is present.
+ */
+export async function pingGemini() {
+  if (!geminiConfigured) {
+    return { ok: false, backend: BACKEND, error: 'no Gemini key configured' }
+  }
+
+  const steps = []
+  try {
+    const model = await resolveModel()
+    steps.push({ step: 'model', ok: true, detail: model })
+
+    const grounded = await research(model, 'In one short sentence, what is an industrial placement in UK engineering?')
+    steps.push({
+      step: 'google_search grounding',
+      ok: true,
+      detail: urlContextSupported ? 'accepted, with url_context' : 'accepted, without url_context',
+    })
+
+    const structured = await callGemini(model, {
+      contents: [{ role: 'user', parts: [{ text: `Summarise in one sentence: ${grounded.text.slice(0, 400)}` }] }],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 256,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { summary: { type: 'string' } },
+          required: ['summary'],
+        },
+      },
+    }, EXTRACT_TIMEOUT_MS)
+    JSON.parse(structured.text)
+    steps.push({ step: 'structured output', ok: true, detail: 'responseSchema honoured' })
+
+    return { ok: true, backend: BACKEND, model, steps }
+  } catch (error) {
+    return { ok: false, backend: BACKEND, error: error?.message ?? String(error), steps }
   }
 }

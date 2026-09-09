@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "check": "node scripts/check-invariants.mjs",
+    "check:providers": "node scripts/check-providers.mjs",
     "monitor": "node scripts/role-monitor.mjs",
     "discover": "node scripts/placement-discovery.mjs",
     "audit": "node scripts/placement-audit.mjs",

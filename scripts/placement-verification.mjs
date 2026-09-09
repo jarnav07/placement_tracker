@@ -32,7 +32,7 @@ import { gatherEvidence, deterministicVerdict } from './verify/evidence.mjs'
 import {
   RESEARCHED_FIELDS, decideStatus, needsSecondOpinion, mergeRecords, TARGET_YEAR,
 } from './verify/record.mjs'
-import { verifyWithGemini, geminiApiKey, resolveModel } from './verify/gemini.mjs'
+import { verifyWithGemini, geminiConfigured, resolveModel, describeBackend, explainGeminiError } from './verify/gemini.mjs'
 import { verifyWithAzure, azureConfigured } from './verify/azure.mjs'
 import { openingIsDue, daysUntil, todayIso } from './verify/dates.mjs'
 
@@ -41,8 +41,9 @@ const env = name => (process.env[name] || '').trim().replace(/^['"]|['"]$/g, '')
 const supabaseUrl = (env('SUPABASE_URL') || env('VITE_SUPABASE_URL')).replace(/\/$/, '')
 const supabaseKey = env('SUPABASE_SERVICE_ROLE_KEY')
 if (!supabaseUrl || !supabaseKey) throw new Error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.')
-if (!geminiApiKey && !azureConfigured) {
-  throw new Error('No verification provider configured. Set GEMINI_API_KEY (primary) and/or the AZURE_OPENAI_* secrets (secondary).')
+if (!geminiConfigured && !azureConfigured) {
+  throw new Error('No verification provider configured. Set VERTEX_API_KEY (Vertex AI) or GEMINI_API_KEY (AI Studio)'
+    + ' for the primary verifier, and/or the AZURE_OPENAI_* secrets for the secondary.')
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey, {
@@ -99,15 +100,29 @@ async function loadRoles() {
 // One role
 // ---------------------------------------------------------------------------
 
+let explainedPrimaryFailure = false
+
 async function verifyRole(role) {
   const evidence = await gatherEvidence(role)
   const verdict = deterministicVerdict(role, evidence)
 
-  const primary = geminiApiKey
+  const primary = geminiConfigured
     ? await verifyWithGemini(role, evidence, verdict)
-    : { ok: false, provider: 'Gemini', error: 'GEMINI_API_KEY is not set' }
+    : { ok: false, provider: 'Gemini', error: 'no Gemini key configured' }
 
-  if (!primary.ok) console.warn(`  primary (Gemini) unavailable: ${primary.error}`)
+  if (!primary.ok) {
+    console.warn(`  primary (Gemini) unavailable: ${primary.error}`)
+    // Said once per run, not once per role: a misconfigured key would otherwise
+    // repeat the same paragraph a few hundred times in the workflow log.
+    if (!explainedPrimaryFailure) {
+      const explanation = explainGeminiError(primary.error)
+      if (explanation) {
+        console.warn(`  ${explanation}`)
+        console.warn('  Run `npm run check:providers` to test the key on its own.')
+      }
+      explainedPrimaryFailure = true
+    }
+  }
 
   const second = needsSecondOpinion({
     role,
@@ -241,8 +256,9 @@ async function recordFailure(role, message) {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  if (geminiApiKey) await resolveModel()
-  else console.warn('GEMINI_API_KEY is not set — running on the Azure secondary alone. Accuracy will be lower.')
+  console.log(describeBackend())
+  if (geminiConfigured) await resolveModel()
+  else console.warn('No Gemini key configured — running on the Azure secondary alone. Accuracy will be lower.')
 
   const roles = await loadRoles()
   const total = roles.length
@@ -253,7 +269,7 @@ async function main() {
     ONLY_STALE_DAYS > 0 ? `, stale > ${ONLY_STALE_DAYS}d` : '',
     LIMIT > 0 ? `, limit ${LIMIT}` : '',
     DRY_RUN ? ', DRY RUN' : '',
-    `). Primary: ${geminiApiKey ? 'Gemini' : 'none'}.`,
+    `). Primary: ${geminiConfigured ? 'Gemini' : 'none'}.`,
     ` Secondary: ${USE_SECONDARY && azureConfigured ? 'Azure (on demand)' : 'disabled'}.`,
     ` Concurrency ${MAX_CONCURRENT}.`,
   ].join(''))

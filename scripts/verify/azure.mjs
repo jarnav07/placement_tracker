@@ -150,3 +150,25 @@ export async function verifyWithAzure(role, evidence, verdict) {
 }
 
 export const azureConfigured = Boolean(azureApiKey && azureEndpoint && azureDeployment)
+
+/** One cheap probe of the Azure deployment, used by `npm run check:providers`. */
+export async function pingAzure() {
+  if (!azureConfigured) return { ok: false, error: 'AZURE_OPENAI_* are not all set' }
+  try {
+    const response = await fetch(`${azureEndpoint}/openai/v1/responses`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(60000),
+      headers: { 'Content-Type': 'application/json', 'api-key': azureApiKey },
+      body: JSON.stringify({
+        model: azureDeployment,
+        input: [{ role: 'user', content: [{ type: 'input_text', text: 'Reply with the single word: ready' }] }],
+        max_output_tokens: 32,
+      }),
+    })
+    const body = await response.json().catch(() => null)
+    if (!response.ok) throw new Error(body?.error?.message || `Azure HTTP ${response.status}`)
+    return { ok: true, deployment: azureDeployment, reply: String(body?.output_text ?? '').trim().slice(0, 40) }
+  } catch (error) {
+    return { ok: false, error: error?.message ?? String(error) }
+  }
+}

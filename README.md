@@ -263,6 +263,7 @@ npm run dev
 | `npm run build` | Type-check and build for production |
 | `npm run preview` | Serve the production build |
 | `npm run check` | Verify the invariants above (offline, no credentials) |
+| `npm run check:providers` | Prove the Gemini and Azure keys actually work |
 | `npm run discover` | Crawl tracked careers pages for new 2027 roles |
 | `npm run verify` | Re-verify and enrich every tracked role (the scheduled pass) |
 | `npm run openings` | Open placements whose published opening day has arrived |
@@ -318,17 +319,47 @@ or the deployment name are wrong, not that a few sites timed out.
 | --- | --- |
 | `SUPABASE_URL` (or `VITE_SUPABASE_URL`) | discovery, verification, openings |
 | `SUPABASE_SERVICE_ROLE_KEY` | discovery, verification, openings |
-| `GEMINI_API_KEY` | **primary verifier** — get one at <https://aistudio.google.com/apikey> |
+| `VERTEX_API_KEY` **or** `GEMINI_API_KEY` | **primary verifier** — exactly one is needed |
 | `AZURE_OPENAI_ENDPOINT` | secondary verifier |
 | `AZURE_OPENAI_API_KEY` | secondary verifier |
 | `AZURE_OPENAI_DEPLOYMENT_NAME` | secondary verifier (e.g. `gpt-4.1-mini`) |
 
-Optional repository **variable** (not a secret): `GEMINI_MODEL` pins the model. Leave it unset
-and the verifier reads the API's own model list and picks the strongest one your key can
-reach, so a model deprecation degrades instead of breaking the nightly run.
+Optional repository **variables** (not secrets): `GEMINI_BACKEND` (`vertex` or `aistudio`)
+forces a backend when both keys are set, and `GEMINI_MODEL` pins the model. Leave `GEMINI_MODEL`
+unset and the verifier reads the backend's model list, then falls back through known models in
+order, so a model deprecation degrades instead of breaking the nightly run.
 
-The workflow fails fast if `GEMINI_API_KEY` is missing, and warns — without failing — if the
-Azure secrets are missing, since the second opinion is what allows a role to be closed.
+The workflow fails fast if neither Gemini key is present, then runs `npm run check:providers`
+before doing any work — proving the key is usable rather than discovering it a few hundred
+calls later. It warns, without failing, if the Azure secrets are missing, since the second
+opinion is what allows a role to be closed.
+
+### Choosing a Gemini backend
+
+Both reach the same models. Only the endpoint and the key differ.
+
+| | Vertex AI | Gemini Developer API |
+| --- | --- | --- |
+| Secret | `VERTEX_API_KEY` | `GEMINI_API_KEY` |
+| Endpoint | `aiplatform.googleapis.com/v1beta1/publishers/google/models/…` | `generativelanguage.googleapis.com/v1beta/models/…` |
+| Key from | Vertex AI **express mode** | <https://aistudio.google.com/apikey> |
+
+**Vertex needs an express-mode key specifically.** Express mode is what makes Vertex accept an
+API key at all: a plain Google Cloud API key is refused with *"API keys are not supported by
+this API — expected OAuth2 access token"* even when the Vertex AI API is enabled on the
+project. That error means the wrong kind of key, not a malformed one.
+
+Express mode also takes **no project id and no location** — the endpoint is global. A
+project-scoped Vertex endpoint (`LOCATION-aiplatform.googleapis.com/v1/projects/…`) needs an
+OAuth token from service-account credentials, which an API key cannot provide; the tracker
+does not use one, and says so if a project id is configured.
+
+```bash
+npm run check:providers
+```
+
+Exercises what actually breaks — authentication, the Google Search grounding tool, and
+structured output — and names the fix when a key is wrong. Costs a few hundred tokens.
 | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` | the Pages build |
 
 The workflow fails fast with a named list if any are missing.
