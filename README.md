@@ -210,9 +210,10 @@ arrives.
 ### The "new" mark
 
 `opened_at` is stamped by a Postgres trigger the moment `application_status` becomes
-`Open Now`. Roles carry a **New** mark on the board for 10 days after that, the stat row shows
-a "Just opened" count, and `Just opened` is a sort option. Roles that were already open before
-the trigger existed have no `opened_at` and correctly never show as new.
+`Open Now`. A role carries the **New** mark only on the calendar day it opened — deliberately
+not a rolling window, so a role that opened yesterday never still reads as new. The stat row
+shows a "Just opened" count and `Just opened` is a sort option. Roles that were already open
+before the trigger existed have no `opened_at` and correctly never show as new.
 
 ---
 
