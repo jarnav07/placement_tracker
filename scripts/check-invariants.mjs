@@ -624,6 +624,27 @@ check('the trail is written after the status is settled',
   verification.indexOf('update.source_verified = evidenceTrail') > verification.indexOf("update.application_status = 'Unknown'"),
   'building it earlier is what let the two disagree')
 
+// --- 12d. A published opening date is a prediction, not evidence ------------
+// 45 of 82 Open Now roles were opened purely because a recorded opening date had
+// arrived, with nothing checking that applications actually opened — and the
+// date was usually one the model itself supplied. It may flip a card on the day;
+// it may not keep asserting for six weeks, and it may not outrank the board.
+const scheduled = (overrides = {}) => decideStatus({
+  role: { application_status: 'Not Yet Published', exact_opening_date: '2026-09-01', application_link: 'https://x.com/careers' },
+  record: {}, verdict: noVerdict,
+  primary: judgement({ proposedStatus: 'Unknown', confidence: 0.4, openingAnnounced: true }),
+  secondary: null, today: '2026-09-07', ...overrides,
+}).status
+
+check('a published opening day that has just arrived opens the role',
+  scheduled() === 'Open Now')
+check('a published opening date stops asserting once it is stale',
+  scheduled({ today: '2026-09-20' }) === null,
+  'six weeks of unverified "apply now" is how a slipped date becomes a wrong one')
+check('an enumerated board without the role beats a published opening date',
+  scheduled({ verdict: absentVerdict }) === 'Closed',
+  'the employer not listing the role outranks its own earlier schedule')
+
 // --- 12c. Telling one vacancy from a landing page ---------------------------
 const { isSpecificPosting } = await import('./verify/evidence.mjs')
 

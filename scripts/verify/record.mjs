@@ -25,6 +25,13 @@ import { isSpecificPosting } from './evidence.mjs'
 
 export const TARGET_YEAR = 2027
 
+/**
+ * How long a published opening date may keep asserting "Open Now" on its own.
+ * The scheduled-openings job uses a longer grace to flip a card on the day; this
+ * is the window in which a verification pass will re-assert from the date alone.
+ */
+export const SCHEDULED_OPENING_GRACE_DAYS = 7
+
 export const STATES = ['Open Now', 'Opening Soon', 'Expected', 'Not Yet Published', 'Closed', 'Unknown']
 export const OPPORTUNITY_TYPES = ['Industrial Placement', 'Spring Week / Insight', 'Internship / Co-op', 'Other Student Programme']
 export const DEADLINE_TYPES = ['Rolling', 'Fixed', 'Vacancy dependent', 'TBC']
@@ -318,13 +325,27 @@ export function decideStatus({ role, record, verdict, primary, secondary, today 
   // --- 4. A published opening date that has arrived opens the role -----------
   // The tracker's promise: when a posting names the day applications go live,
   // that day flips the card without waiting for a model to notice.
+  //
+  // A published date is a PREDICTION, though, not evidence that anything opened,
+  // and the date itself is usually one the model supplied. Two limits keep that
+  // from becoming a standing "apply now" nobody ever checked:
+  //
+  //   - a short window. `openingHasArrived` allows 45 days by default, which is
+  //     right for the cheap scheduled job that flips a card on the day, and far
+  //     too long here: this runs on every pass, so a date could re-assert an
+  //     unverified role for six weeks. After a week a genuine opening has a live
+  //     posting or an open signal, and the ordinary corroborated paths catch it.
+  //   - the board's silence wins. If the employer's own board was enumerated and
+  //     the role is not on it, a date does not override that.
   const announced = providers.find(p => p.openingAnnounced)
   const openingDate = record?.exact_opening_date || role.exact_opening_date
-  if (announced && openingHasArrived(openingDate, today)) {
+  if (announced && !boardAbsent && openingHasArrived(openingDate, today, SCHEDULED_OPENING_GRACE_DAYS)) {
     return {
       status: 'Open Now',
       confidence: 0.8,
-      reason: `The employer published ${openingDate} as the day applications open for this role, and that day has arrived.`,
+      reason: `The employer published ${openingDate} as the day applications open for this role, and that day has arrived.`
+        + ' This is the published schedule rather than a confirmed live application, so it stands only briefly'
+        + ' unless a posting or an open application route corroborates it.',
       applicationUrl: '',
     }
   }
