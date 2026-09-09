@@ -702,6 +702,10 @@ check('the aggregator list covers the sites this tracker actually seeds from',
 check('an employer board is not mistaken for an aggregator',
   ['careers.williamsf1.com', 'job-boards.greenhouse.io', 'jobs.lever.co', 'racingcareers.mclaren.com']
     .every(host => !/(^|\.)(motorsportjobs|indeed|linkedin|glassdoor|totaljobs|reed|monster|ziprecruiter|jobsite|cv-library|adzuna|jobserve|milkround|brightnetwork|ratemyplacement|targetjobs|gradcracker|prospects|efinancialcareers|simplyhired|talent|jooble)\.[a-z.]+$/i.test(host)))
+check('discovery reports the seed pages that yielded nothing',
+  /reportSourceCoverage\(coverage\)/.test(discoverySource)
+  && /kind: 'unreachable'/.test(discoverySource),
+  'a source it could not fetch must not be indistinguishable from one with no vacancies')
 check('a posting that states its own location does not inherit the seed country',
   /candidate\.locationFromPosting \? null : candidate\.country/.test(discoverySource),
   'three Palantir internships in Sydney, Seoul and Honolulu were filed as United Kingdom')

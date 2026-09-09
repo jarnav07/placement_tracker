@@ -213,7 +213,35 @@ function normaliseDeadlineType(value) {
   return 'TBC'
 }
 
-async function collectCandidates(sourcePages, byKey, byUrl, notInterested) {
+/**
+ * What each seed page yielded.
+ *
+ * Discovery used to skip an unreachable source silently, which made a blind spot
+ * indistinguishable from an employer that genuinely has nothing posted. Ferrari
+ * and Haas each held one generic row after run 65 and the log said nothing at
+ * all about them — there was no way to tell whether their pages had been read.
+ * Since the whole complaint that started this work was "roles are missing", the
+ * sources that produced nothing are the most important thing the run can report.
+ */
+function reportSourceCoverage(coverage) {
+  const groups = { unreachable: [], noBoard: [], nothingMatched: [] }
+  for (const [url, outcome] of coverage) {
+    if (groups[outcome.kind]) groups[outcome.kind].push(`${outcome.company} (${url})`)
+  }
+
+  const labels = {
+    unreachable: 'COULD NOT BE FETCHED — the tracker did not look at these at all',
+    noBoard: 'no applicant tracking system found, and no vacancy links in the HTML',
+    nothingMatched: 'read, but no link looked like a student vacancy',
+  }
+  for (const [kind, label] of Object.entries(labels)) {
+    if (!groups[kind].length) continue
+    console.log(`\n${groups[kind].length} source pages ${label}:`)
+    for (const entry of groups[kind].sort()) console.log(`  - ${entry}`)
+  }
+}
+
+async function collectCandidates(sourcePages, byKey, byUrl, notInterested, coverage) {
   const candidates = []
   const seen = new Set()
   const uniqueSources = []
@@ -229,10 +257,20 @@ async function collectCandidates(sourcePages, byKey, byUrl, notInterested) {
   for (const source of uniqueSources.slice(0, MAX_SOURCE_PAGES)) {
     // An aggregator would lend this seed row's company to every employer's
     // vacancies listed on it.
-    if (isAggregator(source.url)) continue
+    if (isAggregator(source.url)) {
+      coverage.set(source.url, { company: source.company, kind: 'aggregator' })
+      continue
+    }
 
     const fetched = await fetchHtml(source.url)
-    if (!fetched || isAggregator(fetched.url)) continue
+    if (!fetched) {
+      coverage.set(source.url, { company: source.company, kind: 'unreachable' })
+      continue
+    }
+    if (isAggregator(fetched.url)) {
+      coverage.set(source.url, { company: source.company, kind: 'aggregator' })
+      continue
+    }
 
     // Two ways to find vacancies on a careers page, in order of reliability.
     //
@@ -256,16 +294,19 @@ async function collectCandidates(sourcePages, byKey, byUrl, notInterested) {
       }
     }
 
+    const boardPostings = found.length
     for (const link of extractLinks(fetched.html, fetched.url)) {
       found.push({ label: link.label, href: link.href, location: '' })
     }
 
+    let matched = 0
     for (const link of found) {
       if (!looksLikeRoleLink(link, fetched.url)) continue
       const candidateKey = roleKey(source.company, link.label)
       if (seen.has(candidateKey) || byKey.has(candidateKey) || byUrl.has(link.href) || notInterested.has(candidateKey)) continue
 
       seen.add(candidateKey)
+      matched++
       candidates.push({
         company: source.company,
         specific_role: link.label.replace(/\s+/g, ' ').trim(),
@@ -282,6 +323,11 @@ async function collectCandidates(sourcePages, byKey, byUrl, notInterested) {
       })
       if (candidates.length >= MAX_CANDIDATES) return candidates
     }
+
+    coverage.set(source.url, {
+      company: source.company,
+      kind: matched ? 'yielded' : boardPostings ? 'nothingMatched' : board ? 'nothingMatched' : 'noBoard',
+    })
   }
 
   return candidates
@@ -291,8 +337,10 @@ async function main() {
   console.log('Deterministic discovery started. Candidates come only from existing tracked career sources.')
 
   const { byKey, byUrl, notInterested, sourcePages } = await loadExistingIndex()
-  const candidates = await collectCandidates(sourcePages, byKey, byUrl, notInterested)
+  const coverage = new Map()
+  const candidates = await collectCandidates(sourcePages, byKey, byUrl, notInterested, coverage)
   console.log(`Existing index: ${byKey.size} roles. Candidate links found: ${candidates.length}.`)
+  reportSourceCoverage(coverage)
 
   let inserted = 0
   let rejected = 0
