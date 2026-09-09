@@ -779,13 +779,21 @@ export function isSpecificPosting(url) {
     || /^\d{6,}/.test(segment))
   if (hasId) return true
 
-  // Otherwise a posting-shaped path with a descriptive slug: /job/<slug>,
-  // /postings/<slug>, /job-detail/<slug>, /vacancy/<slug>.
+  // A posting-shaped path with a descriptive slug: /job/<slug>, /postings/<slug>,
+  // /job-detail/<slug>, /vacancy/<slug>.
   const postingSegment = segments.findIndex(segment =>
     /^(job|jobs|posting|postings|vacancy|vacancies|job-detail|jobdetail|opening|position)$/i.test(segment))
   if (postingSegment !== -1 && segments.length > postingSegment + 1) {
     const slug = segments[postingSegment + 1]
     return slug.length >= 8 && /[-_]/.test(slug)
   }
+
+  // A long, highly specific slug names one vacancy even without a /job/ segment
+  // or a numeric id — Red Bull's own board does exactly this:
+  //   /int-en/vcarb-f1-team-undergraduate-internship-programme-20272028-prv-ref33640t
+  // Programme landing pages are short by comparison ("early-careers",
+  // "industrial-student-placements"), so three or more hyphens separates them.
+  if (last.length >= 24 && (last.match(/-/g) ?? []).length >= 3) return true
+
   return false
 }

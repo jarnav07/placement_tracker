@@ -634,6 +634,8 @@ for (const url of [
   'https://jobs.smartrecruiters.com/McLarenRacingLtd1/744000147275399',
   'https://jobs.lever.co/palantir/1b6f1d82-d459-4dea-8bc2-8d2ffe6f881a',
   'https://www.motorsportjobs.com/en/job/industrial-placement-2027-2028-control-systems-jaguar-tcs-racing',
+  // A long descriptive slug with no /job/ segment and no numeric id.
+  'https://jobs.redbull.com/int-en/vcarb-f1-team-undergraduate-internship-programme-20272028-prv-ref33640t',
 ]) {
   check(`a single posting is recognised: ${url.slice(8, 58)}`, isSpecificPosting(url))
 }
@@ -645,6 +647,7 @@ for (const url of [
   'https://careers.babcockinternational.com/emerging-talent/',
   'https://careers.baesystems.com/locations/uk/internships/industrial-placements',
   'https://www.redbullracing.com/int-en/projects/industrial-student-placements',
+  'https://www.deshaw.com/careers/internships',
   'not a url',
 ]) {
   check(`a landing page is not mistaken for a posting: ${String(url).slice(0, 52)}`, !isSpecificPosting(url))
