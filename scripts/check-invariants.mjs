@@ -653,6 +653,37 @@ for (const url of [
   check(`a landing page is not mistaken for a posting: ${String(url).slice(0, 52)}`, !isSpecificPosting(url))
 }
 
+// --- 13. Finding the ATS behind a vanity careers domain ---------------------
+// detectBoard only knows ATS-branded hostnames. Williams serves vacancies from
+// careers.williamsf1.com and McLaren from racingcareers.mclaren.com, so nothing
+// could enumerate either — the tracker held one generic row per team while each
+// advertised four or five placements. This reads the board out of the HTML.
+const { detectBoardFromHtml } = await import('./verify/evidence.mjs')
+
+for (const [label, html, pageUrl, type, key] of [
+  ['a Lever link', '<a href="https://jobs.lever.co/mclarenracing/abc">Apply</a>', '', 'lever', 'mclarenracing'],
+  ['a Greenhouse embed script', '<script src="https://boards.greenhouse.io/embed/job_board/js?for=williamsf1"></script>', '', 'greenhouse', 'williamsf1'],
+  ['a Greenhouse embed iframe', '<script src="https://boards.greenhouse.io/embed/job_board?for=acme"></script>', '', 'greenhouse', 'acme'],
+  ['a Greenhouse job board', '<iframe src="https://job-boards.greenhouse.io/acme"></iframe>', '', 'greenhouse', 'acme'],
+  ['an Ashby board', '<a href="https://jobs.ashbyhq.com/isomorphiclabs">x</a>', '', 'ashby', 'isomorphiclabs'],
+  ['a SmartRecruiters slug', 'fetch("https://jobs.smartrecruiters.com/McLarenRacingLtd1/123")', 'https://racingcareers.mclaren.com/early-careers', 'smartrecruiters', 'McLarenRacingLtd1'],
+  ['a SmartRecruiters company id', 'var cfg={"companyId":"1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809"};//smartrecruiters', 'https://careers.williamsf1.com/placements', 'smartrecruiters', '1a2b3c4d-5e6f-7081-92a3-b4c5d6e7f809'],
+  ['a Teamtailor board', '<a href="https://acme.teamtailor.com/jobs">x</a>', '', 'teamtailor', 'acme'],
+  ['a Workable board', '<a href="https://apply.workable.com/acme/">x</a>', '', 'workable', 'acme'],
+  ['a Workday tenant with a data-centre label', '<a href="https://acme.wd3.myworkdayjobs.com/en-US/External">x</a>', '', 'workday', 'acme'],
+]) {
+  const board = detectBoardFromHtml(html, pageUrl)
+  check(`the ATS is read from ${label}`, board?.type === type && board?.key === key, JSON.stringify(board))
+}
+for (const [label, html] of [['a page with no ATS', '<html>nothing here</html>'], ['empty HTML', '']]) {
+  check(`no board is invented from ${label}`, detectBoardFromHtml(html, '') === null)
+}
+
+const discovery = read('scripts/placement-discovery.mjs')
+check('discovery enumerates the board before falling back to anchor tags',
+  discovery.includes('detectBoardFromHtml(fetched.html, fetched.url)') && discovery.includes('queryBoardJobs(board'),
+  'a JavaScript-rendered careers page yields no anchors, so scraping alone finds nothing')
+
 // --- Result -----------------------------------------------------------------
 
 if (failures.length) {

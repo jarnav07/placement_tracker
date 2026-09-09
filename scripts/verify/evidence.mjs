@@ -209,6 +209,59 @@ export function detectBoard(url) {
   return null
 }
 
+/**
+ * Identify the applicant tracking system behind a CUSTOM careers domain.
+ *
+ * `detectBoard` only recognises ATS-branded hostnames (jobs.lever.co,
+ * *.myworkdayjobs.com...). The employers that matter most here do not use those:
+ * Williams serves its vacancies from careers.williamsf1.com and McLaren from
+ * racingcareers.mclaren.com. Both are ordinary ATS boards behind a vanity
+ * domain, and because nothing detected them, neither discovery nor verification
+ * could enumerate a single vacancy — which is why the tracker held one generic
+ * row per team instead of the four or five placements each actually advertises.
+ *
+ * The board always leaves its fingerprints in the served HTML: an embed URL, an
+ * API host, or a company id. This reads those.
+ */
+export function detectBoardFromHtml(html, pageUrl = '') {
+  const text = String(html ?? '')
+  if (!text) return null
+
+  // Greenhouse's embed script names the board in a query parameter and is
+  // checked first: its URL also matches the generic pattern below, which would
+  // otherwise read the path segment "embed" as the board key.
+  const ghEmbed = text.match(/greenhouse\.io\/embed\/job_board(?:\/js)?\?for=([A-Za-z0-9_-]+)/i)
+    || text.match(/Grnhse\.Settings[\s\S]{0,200}?["']([A-Za-z0-9_-]+)["']/i)
+  if (ghEmbed) return { type: 'greenhouse', key: ghEmbed[1], via: 'greenhouse embed script' }
+
+  // SmartRecruiters identifies a company by UUID rather than slug. Only claim
+  // the board when the page carries something queryBoardJobs can actually use:
+  // a company slug, or the UUID it already knows how to read out of the HTML.
+  if (/smartrecruiters/i.test(text)) {
+    const slug = text.match(/jobs\.smartrecruiters\.com\/([A-Za-z0-9_-]+)/i)
+    const uuid = text.match(/companies\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i)
+      || text.match(/"companyId"\s*:\s*"([0-9a-f-]{36})"/i)
+    if (slug || uuid) {
+      return {
+        type: 'smartrecruiters',
+        key: slug?.[1] ?? uuid[1],
+        via: slug ? 'smartrecruiters board link' : 'smartrecruiters company id in page HTML',
+      }
+    }
+  }
+
+  // Any other ATS URL embedded in the page: hand it to detectBoard so both
+  // paths describe a board the same way.
+  const embedded = text.match(
+    /https?:\/\/(?:jobs\.lever\.co\/[A-Za-z0-9_-]+|job-boards\.greenhouse\.io\/[A-Za-z0-9_-]+|jobs\.ashbyhq\.com\/[A-Za-z0-9_-]+|[A-Za-z0-9_-]+\.recruitee\.com|[A-Za-z0-9_-]+\.teamtailor\.com|apply\.workable\.com\/[A-Za-z0-9_-]+|[A-Za-z0-9_.-]+\.myworkdayjobs\.com\/[^"'\s<>]*)/i)
+  if (embedded) {
+    const board = detectBoard(embedded[0])
+    if (board) return { ...board, via: embedded[0] }
+  }
+
+  return null
+}
+
 async function getJson(url, init = {}) {
   try {
     const response = await fetch(url, {

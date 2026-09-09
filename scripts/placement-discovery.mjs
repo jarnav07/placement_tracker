@@ -7,6 +7,7 @@
 import { connect } from './verify/supabase.mjs'
 import { verifyPlacement, TODAY, TARGET_INTAKE } from './placement-verifier.mjs'
 import { classifyOpportunity, looksLikeStudentRole } from './role-quality.mjs'
+import { detectBoard, detectBoardFromHtml, queryBoardJobs } from './verify/evidence.mjs'
 
 const supabase = connect()
 
@@ -189,7 +190,33 @@ async function collectCandidates(sourcePages, byKey, byUrl, notInterested) {
     const fetched = await fetchHtml(source.url)
     if (!fetched) continue
 
+    // Two ways to find vacancies on a careers page, in order of reliability.
+    //
+    // 1. The applicant tracking system behind it. Most employer careers pages
+    //    render their vacancy list in JavaScript, so scraping anchors returns
+    //    nothing at all — which is why the tracker held one generic row for
+    //    teams that advertise four or five separate placements. The board's own
+    //    API returns every posting as data.
+    // 2. Anchor tags, for the pages that really are server-rendered HTML.
+    const found = []
+
+    const board = detectBoard(fetched.url) ?? detectBoardFromHtml(fetched.html, fetched.url)
+    if (board) {
+      const listing = await queryBoardJobs(board, fetched.html, fetched.url, [])
+      for (const job of listing?.jobs ?? []) {
+        if (!job.title || !job.url) continue
+        found.push({ label: job.title, href: job.url, location: job.location || '' })
+      }
+      if (found.length) {
+        console.log(`  ${source.company}: ${found.length} postings from its ${board.type} board (${board.via ?? fetched.url}).`)
+      }
+    }
+
     for (const link of extractLinks(fetched.html, fetched.url)) {
+      found.push({ label: link.label, href: link.href, location: '' })
+    }
+
+    for (const link of found) {
       if (!looksLikeRoleLink(link, fetched.url)) continue
       const candidateKey = roleKey(source.company, link.label)
       if (seen.has(candidateKey) || byKey.has(candidateKey) || byUrl.has(link.href) || notInterested.has(candidateKey)) continue
@@ -199,7 +226,7 @@ async function collectCandidates(sourcePages, byKey, byUrl, notInterested) {
         company: source.company,
         specific_role: link.label.replace(/\s+/g, ' ').trim(),
         country: source.country || '',
-        city: source.city || '',
+        city: link.location || source.city || '',
         application_link: link.href,
         careers_page: fetched.url
       })
