@@ -660,6 +660,34 @@ check('an enumerated board without the role beats a published opening date',
   scheduled({ verdict: absentVerdict }) === 'Closed',
   'the employer not listing the role outranks its own earlier schedule')
 
+// --- 12b-bis. An open role cannot have a deadline in the past ---------------
+// Three live rows held this pair, including a Greenhouse-listed Rocket Lab role
+// with a deadline twelve days gone and a Mercedes row still on a 2025 date.
+const { reconcileDeadline } = await import('./verify/record.mjs')
+const RD_TODAY = '2026-09-09'
+
+const boardWins = reconcileDeadline({ status: 'Open Now', deadline: '2026-08-28', boardLive: true, today: RD_TODAY })
+check('a live board listing outranks a stale extracted deadline',
+  boardWins.status === 'Open Now' && boardWins.deadline === null && boardWins.changed)
+
+const dateWins = reconcileDeadline({ status: 'Open Now', deadline: '2025-09-30', boardLive: false, today: RD_TODAY })
+check('a passed deadline closes a role the board does not list',
+  dateWins.status === 'Closed' && dateWins.deadline === '2025-09-30' && dateWins.changed)
+
+for (const [label, args] of [
+  ['a future deadline is left alone', { status: 'Open Now', deadline: '2026-09-16', boardLive: true }],
+  ['today is not past', { status: 'Open Now', deadline: RD_TODAY, boardLive: false }],
+  ['a missing deadline changes nothing', { status: 'Open Now', deadline: null, boardLive: false }],
+  ['a status other than Open Now is untouched', { status: 'Closed', deadline: '2025-01-01', boardLive: false }],
+]) {
+  check(`deadline reconciliation: ${label}`, !reconcileDeadline({ ...args, today: RD_TODAY }).changed)
+}
+
+check('both writers reconcile the deadline against the status',
+  /reconcileDeadline\(/.test(read('scripts/placement-verification.mjs'))
+  && /reconcileDeadline\(/.test(read('scripts/placement-discovery.mjs')),
+  'the audit and discovery must not disagree about an expired open role')
+
 // --- 12c. Telling one vacancy from a landing page ---------------------------
 const { isSpecificPosting } = await import('./verify/evidence.mjs')
 

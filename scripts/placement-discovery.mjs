@@ -6,6 +6,7 @@
 
 import { connect } from './verify/supabase.mjs'
 import { verifyPlacement, TODAY, TARGET_INTAKE } from './placement-verifier.mjs'
+import { reconcileDeadline } from './verify/record.mjs'
 import { classifyOpportunity, looksLikeStudentRole } from './role-quality.mjs'
 import { detectBoard, detectBoardFromHtml, queryBoardJobs, isSpecificPosting } from './verify/evidence.mjs'
 
@@ -144,6 +145,15 @@ async function loadExistingIndex() {
 }
 
 function buildInsert(candidate, result) {
+  // Rocket Lab's Electron role was inserted as Open Now carrying a deadline
+  // twelve days gone. The same rule the audit uses settles it here.
+  const reconciled = reconcileDeadline({
+    status: result.mappedApplicationStatus,
+    deadline: result.deadline || null,
+    boardLive: result.direct_application_for_exact_role_found === true,
+    today: TODAY,
+  })
+
   // Only columns that still exist after the 2026-09-05 schema cleanup, and only
   // researched ones: `overall_priority` / `priority_score` are derived by a
   // Postgres trigger and the user-owned tracking columns are left at their
@@ -161,14 +171,14 @@ function buildInsert(candidate, result) {
     careers_page: candidate.careers_page || null,
     application_link: result.verified_application_url || candidate.application_link || candidate.careers_page || null,
     placement_duration: result.placement_duration || null,
-    application_status: result.mappedApplicationStatus,
+    application_status: reconciled.status,
     exact_opening_date: result.opening_date || null,
-    exact_deadline: result.deadline || null,
+    exact_deadline: reconciled.deadline,
     deadline_type: normaliseDeadlineType(result.deadline_type),
     degree_requirements: result.degree_requirements || null,
     salary: result.salary || null,
     source_date_checked: TODAY,
-    source_verified: result.evidence
+    source_verified: reconciled.changed ? `${result.evidence}\n${reconciled.reason}` : result.evidence
   }
 }
 

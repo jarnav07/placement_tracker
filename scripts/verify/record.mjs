@@ -443,4 +443,44 @@ export function deadlineDays(role, today) {
   return daysUntil(role.exact_deadline, today)
 }
 
+/**
+ * A role cannot be open for applications after its own deadline has passed.
+ *
+ * The board carried three such rows: Rocket Lab's Electron role listed live on
+ * Greenhouse with a deadline twelve days gone, Apple's with one from August, and
+ * a Mercedes row still holding a 2025 date. Whichever half is wrong, the pair is
+ * incoherent — it sorts the role to the top of "closing soonest" and tells the
+ * user to apply to something that has shut.
+ *
+ * Which half to believe depends on where the evidence came from:
+ *   - The applicant tracking system only serves postings that are still live, and
+ *     it is read deterministically. When it lists the role, the board wins and
+ *     the extracted date is dropped rather than contradicting it.
+ *   - Otherwise the date is the harder fact, and the role is Closed.
+ *
+ * Returns the status and deadline that should actually be written.
+ */
+export function reconcileDeadline({ status, deadline, boardLive, today }) {
+  const days = daysUntil(deadline, today)
+  if (status !== 'Open Now' || days === null || days >= 0) {
+    return { status, deadline, changed: false, reason: '' }
+  }
+
+  if (boardLive) {
+    return {
+      status,
+      deadline: null,
+      changed: true,
+      reason: `The board still lists this role, so the extracted deadline of ${deadline} is wrong and has been dropped.`,
+    }
+  }
+
+  return {
+    status: 'Closed',
+    deadline,
+    changed: true,
+    reason: `The deadline of ${deadline} has passed and no live board listing contradicts it.`,
+  }
+}
+
 export { toIsoDate, toDatedValue }

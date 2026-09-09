@@ -30,7 +30,7 @@ import { connect } from './verify/supabase.mjs'
 
 import { gatherEvidence, deterministicVerdict } from './verify/evidence.mjs'
 import {
-  RESEARCHED_FIELDS, decideStatus, needsSecondOpinion, mergeRecords, TARGET_YEAR,
+  RESEARCHED_FIELDS, decideStatus, needsSecondOpinion, mergeRecords, TARGET_YEAR, reconcileDeadline,
 } from './verify/record.mjs'
 import { verifyWithGemini, geminiConfigured, resolveModel, describeBackend, explainGeminiError } from './verify/gemini.mjs'
 import { verifyWithAzure, azureConfigured } from './verify/azure.mjs'
@@ -235,6 +235,21 @@ function buildUpdate(role, outcome) {
   }
 
   if (!role.start_year) update.start_year = TARGET_YEAR
+
+  // An open role whose deadline has already passed is incoherent whichever half
+  // is wrong, so it is never written. Runs before the evidence trail, so the
+  // trail describes the reconciled values.
+  const reconciled = reconcileDeadline({
+    status: update.application_status ?? role.application_status,
+    deadline: update.exact_deadline ?? role.exact_deadline,
+    boardLive: verdict.status === 'OPEN_NOW',
+    today: TODAY,
+  })
+  if (reconciled.changed) {
+    update.application_status = reconciled.status
+    update.exact_deadline = reconciled.deadline
+    outcome.decision.reason = `${outcome.decision.reason} ${reconciled.reason}`.trim()
+  }
 
   // Written last, so it can describe the status this update actually stores.
   update.source_verified = evidenceTrail(role, outcome, update.application_status ?? role.application_status)
