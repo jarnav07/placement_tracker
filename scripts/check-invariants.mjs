@@ -519,9 +519,15 @@ check('the provider health check uses the tolerant parser, not a bare JSON.parse
 // thinking on can spend its whole budget reasoning and get cut off mid-preamble,
 // which is exactly how the nightly pass died: 256 output tokens, and the reply
 // never reached the JSON.
-for (const marker of ['thinkingConfig: { thinkingBudget: 0 }', 'maxOutputTokens: 8192', 'maxOutputTokens: 2048']) {
+for (const marker of ['thinkingConfig: { thinkingBudget: MIN_THINKING_BUDGET }', 'maxOutputTokens: 8192', 'maxOutputTokens: 2048']) {
   check(`structured Gemini calls set ${marker}`, gemini.includes(marker))
 }
+check('the thinking budget is one every 2.5 model accepts',
+  gemini.includes('export const MIN_THINKING_BUDGET = 128') && !/thinkingBudget: 0\b/.test(gemini),
+  'Pro errors on 0; only Flash allows it')
+check('a model that rejects thinkingConfig is retried without it',
+  gemini.includes('THINKING_UNSUPPORTED_RE') && gemini.includes('retrying without it'),
+  'the budget is an optimisation and must never fail a row')
 check('no structured Gemini call is left on a starvation budget',
   !/maxOutputTokens: (?:256|512)\b/.test(gemini),
   'a thinking model needs room for the object after its reasoning')

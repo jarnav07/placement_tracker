@@ -340,6 +340,15 @@ function rolePrompt(role, evidence, verdict) {
 // API calls
 // ---------------------------------------------------------------------------
 
+/**
+ * Smallest thinking budget every Gemini 2.5 model accepts. Pro's floor is 128 and
+ * it errors on 0; Flash allows 0 but is happy at 128.
+ */
+export const MIN_THINKING_BUDGET = 128
+
+/** A model that rejects any thinking configuration at all. */
+const THINKING_UNSUPPORTED_RE = /thinking[_ ]?budget|thinking[_ ]?config|does not support (setting )?thinking/i
+
 async function callGemini(model, body, timeoutMs) {
   let lastError = null
 
@@ -370,6 +379,15 @@ async function callGemini(model, body, timeoutMs) {
         if ((response.status === 404 || response.status === 400) && MODEL_MISSING_RE.test(message)) {
           const next = demoteModel(model)
           if (next) return callGemini(next, body, timeoutMs)
+        }
+        // Some models reject thinking configuration outright. The budget is an
+        // optimisation, never a requirement, so drop it and try once more rather
+        // than failing the row over it.
+        if (response.status === 400 && THINKING_UNSUPPORTED_RE.test(message)
+            && body?.generationConfig?.thinkingConfig) {
+          const { thinkingConfig, ...generationConfig } = body.generationConfig
+          console.warn(`  gemini: ${model} rejects thinkingConfig — retrying without it.`)
+          return callGemini(model, { ...body, generationConfig }, timeoutMs)
         }
         const error = new Error(message)
         error.status = response.status
@@ -462,9 +480,12 @@ async function extract(model, brief, prompt) {
     generationConfig: {
       temperature: 0,
       // The reasoning happened in the grounded research pass; this call only has
-      // to format that brief as JSON. Leaving thinking on lets a 2.5 model spend
-      // the whole budget reasoning and get truncated before the object starts.
-      thinkingConfig: { thinkingBudget: 0 },
+      // to format that brief as JSON. Left unbounded, a 2.5 model spends the
+      // whole budget thinking and is truncated before the object starts.
+      // 128 is the floor Pro accepts and is within Flash's range; 0 is Flash-only
+      // and Pro rejects the request. `callGemini` drops this entirely if a model
+      // refuses it.
+      thinkingConfig: { thinkingBudget: MIN_THINKING_BUDGET },
       maxOutputTokens: 8192,
       responseMimeType: 'application/json',
       responseSchema: buildSchema(),
@@ -578,9 +599,9 @@ export async function pingGemini() {
       contents: [{ role: 'user', parts: [{ text: `Summarise in one sentence: ${grounded.text.slice(0, 400)}` }] }],
       generationConfig: {
         temperature: 0,
-        // Mirrors the extraction call: no thinking budget, and enough room that a
-        // preamble cannot crowd out the object.
-        thinkingConfig: { thinkingBudget: 0 },
+        // Mirrors the extraction call: thinking held to the floor, and enough
+        // room that reasoning cannot crowd out the object.
+        thinkingConfig: { thinkingBudget: MIN_THINKING_BUDGET },
         maxOutputTokens: 2048,
         responseMimeType: 'application/json',
         responseSchema: {
