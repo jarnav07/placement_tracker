@@ -84,6 +84,27 @@ function extractLinks(html, baseUrl) {
   return links
 }
 
+/**
+ * Job aggregators, which must never be crawled as a source.
+ *
+ * A candidate inherits the COMPANY of the seed row whose page it was found on.
+ * That is sound for an employer's own careers page, where every vacancy belongs
+ * to that employer. An aggregator carries every team's vacancies, so the
+ * inheritance is simply false: Alpine's seed page is motorsportjobs.com, and
+ * crawling it filed "Industrial Placement (2027-2028) - Control Systems - Jaguar
+ * TCS Racing" under Alpine F1. A row attributed to the wrong employer is worse
+ * than a missing one — it is the company name the user searches and sorts by.
+ *
+ * Aggregator postings still reach the tracker through the employer's own board,
+ * where the attribution is unambiguous.
+ */
+const AGGREGATOR_HOST_RE =
+  /(^|\.)(motorsportjobs|indeed|linkedin|glassdoor|totaljobs|reed|monster|ziprecruiter|jobsite|cv-library|adzuna|jobserve|milkround|brightnetwork|ratemyplacement|targetjobs|gradcracker|prospects|efinancialcareers|simplyhired|talent|jooble)\.[a-z.]+$/i
+
+function isAggregator(url) {
+  try { return AGGREGATOR_HOST_RE.test(new URL(url).hostname) } catch { return false }
+}
+
 function norm(value = '') {
   return String(value).toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
 }
@@ -165,7 +186,7 @@ function buildInsert(candidate, result) {
     opportunity_type: classifyOpportunity(`${candidate.specific_role} ${result.programme_type ?? ''}`),
     sector: null,
     engineering_area: null,
-    country: result.location_country || candidate.country || null,
+    country: result.location_country || (candidate.locationFromPosting ? null : candidate.country) || null,
     city: result.location_city || candidate.city || null,
     website: result.website || null,
     careers_page: candidate.careers_page || null,
@@ -206,8 +227,12 @@ async function collectCandidates(sourcePages, byKey, byUrl, notInterested) {
   }
 
   for (const source of uniqueSources.slice(0, MAX_SOURCE_PAGES)) {
+    // An aggregator would lend this seed row's company to every employer's
+    // vacancies listed on it.
+    if (isAggregator(source.url)) continue
+
     const fetched = await fetchHtml(source.url)
-    if (!fetched) continue
+    if (!fetched || isAggregator(fetched.url)) continue
 
     // Two ways to find vacancies on a careers page, in order of reliability.
     //
@@ -246,6 +271,12 @@ async function collectCandidates(sourcePages, byKey, byUrl, notInterested) {
         specific_role: link.label.replace(/\s+/g, ' ').trim(),
         country: source.country || '',
         city: link.location || source.city || '',
+        // Where the location came from. A posting that states its own location
+        // has said everything it is going to say about geography, so the seed
+        // row's country must not be mixed into it — that is how three Palantir
+        // internships in Sydney, Seoul and Honolulu were filed under the United
+        // Kingdom, which is exactly the kind of error that wastes an application.
+        locationFromPosting: Boolean(link.location),
         application_link: link.href,
         careers_page: fetched.url
       })

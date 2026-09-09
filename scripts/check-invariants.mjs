@@ -688,6 +688,24 @@ check('both writers reconcile the deadline against the status',
   && /reconcileDeadline\(/.test(read('scripts/placement-discovery.mjs')),
   'the audit and discovery must not disagree about an expired open role')
 
+// --- 12b-ter. Attribution and geography of a discovered candidate -----------
+// A candidate inherits the seed row's company, which is only true on an
+// employer's own careers page. Alpine's seed is motorsportjobs.com, and crawling
+// it filed a Jaguar TCS Racing placement under Alpine F1.
+const discoverySource = read('scripts/placement-discovery.mjs')
+check('discovery refuses to crawl a job aggregator',
+  /isAggregator\(source\.url\)/.test(discoverySource) && /isAggregator\(fetched\.url\)/.test(discoverySource),
+  'both the seed URL and the URL it redirects to must be checked')
+check('the aggregator list covers the sites this tracker actually seeds from',
+  ['motorsportjobs.com', 'www.linkedin.com', 'uk.indeed.com', 'www.brightnetwork.co.uk', 'www.gradcracker.com']
+    .every(host => /(^|\.)(motorsportjobs|indeed|linkedin|glassdoor|totaljobs|reed|monster|ziprecruiter|jobsite|cv-library|adzuna|jobserve|milkround|brightnetwork|ratemyplacement|targetjobs|gradcracker|prospects|efinancialcareers|simplyhired|talent|jooble)\.[a-z.]+$/i.test(host)))
+check('an employer board is not mistaken for an aggregator',
+  ['careers.williamsf1.com', 'job-boards.greenhouse.io', 'jobs.lever.co', 'racingcareers.mclaren.com']
+    .every(host => !/(^|\.)(motorsportjobs|indeed|linkedin|glassdoor|totaljobs|reed|monster|ziprecruiter|jobsite|cv-library|adzuna|jobserve|milkround|brightnetwork|ratemyplacement|targetjobs|gradcracker|prospects|efinancialcareers|simplyhired|talent|jooble)\.[a-z.]+$/i.test(host)))
+check('a posting that states its own location does not inherit the seed country',
+  /candidate\.locationFromPosting \? null : candidate\.country/.test(discoverySource),
+  'three Palantir internships in Sydney, Seoul and Honolulu were filed as United Kingdom')
+
 // --- 12c. Telling one vacancy from a landing page ---------------------------
 const { isSpecificPosting } = await import('./verify/evidence.mjs')
 
