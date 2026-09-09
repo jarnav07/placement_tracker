@@ -7,7 +7,7 @@
 import { connect } from './verify/supabase.mjs'
 import { verifyPlacement, TODAY, TARGET_INTAKE } from './placement-verifier.mjs'
 import { classifyOpportunity, looksLikeStudentRole } from './role-quality.mjs'
-import { detectBoard, detectBoardFromHtml, queryBoardJobs } from './verify/evidence.mjs'
+import { detectBoard, detectBoardFromHtml, queryBoardJobs, isSpecificPosting } from './verify/evidence.mjs'
 
 const supabase = connect()
 
@@ -103,6 +103,15 @@ function roleKey(company, role) {
  */
 function looksLikeRoleLink(link, sourceUrl) {
   if (!link.href || link.href === sourceUrl) return false
+
+  // The link must address ONE vacancy. A row's application_link is the thing the
+  // user clicks to apply, so a search page or a programme landing page produces a
+  // row that cannot be actioned — `careers.rolls-royce.com/en/jobs?search=Internship`
+  // was inserted as a role called "Internship". Every applicant tracking system
+  // posting carries an id or a descriptive slug, so this costs nothing on the
+  // boards that matter and rejects the listing pages wrapped around them.
+  if (!isSpecificPosting(link.href)) return false
+
   return looksLikeStudentRole(link.label, link.href)
 }
 

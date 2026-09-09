@@ -175,6 +175,12 @@ const SHOULD_REJECT = [
   'Meet Thomas - Bringing engineering ideas to life every day', 'Graduate Scheme - Engineering',
   'Senior Aerodynamics Engineer', 'Sustainability standards and performance',
   'International opportunities Outside of the UK? Find out about roles in Canada',
+  // Collateral about a programme, published next to the vacancies themselves.
+  'Download the CGI Graduate and Industrial Placement Brochure',
+  'Student Placement Handbook 2027', 'Industrial Placement Programme Brochure',
+  'Watch our placement students explain their year in industry',
+  // The heading of a listing page, inserted once as a role called "Internship".
+  'Internship', 'Placements',
 ]
 const SHOULD_ACCEPT = [
   'Aerodynamic Design Industrial Placement', 'Mechanical Engineering Placement 2027',
@@ -187,6 +193,15 @@ check('role gate rejects every known scrape artefact',
 check('role gate accepts every known real vacancy',
   SHOULD_ACCEPT.every(title => looksLikeStudentRole(title)),
   SHOULD_ACCEPT.filter(title => !looksLikeStudentRole(title)).join(', '))
+check('role gate rejects a document however its link reads',
+  !looksLikeStudentRole('Aerodynamics Industrial Placement 2027', 'https://x.example/media/placement-pack.pdf'))
+
+// The URL half of the gate lives in discovery, because it judges the link rather
+// than the title. Without it a search page became a row nobody could apply to.
+check('discovery requires a candidate link to address one vacancy',
+  /isSpecificPosting\(link\.href\)/.test(read('scripts/placement-discovery.mjs')),
+  'looksLikeRoleLink must reject listing and search URLs')
+
 check('opportunity classification is stable',
   classifyOpportunity('Aerodynamic Design Industrial Placement') === 'Industrial Placement'
   && classifyOpportunity('Engineering Intern') === 'Internship / Co-op'
