@@ -455,13 +455,49 @@ check('a live board listing opens the role even when the model is unsure',
   decide({ verdict: liveVerdict, primary: judgement({ proposedStatus: 'Unknown', confidence: 0.3 }) }) === 'Open Now')
 check('a confident, contradicting model stops a board listing from opening the role',
   decide({ verdict: liveVerdict, primary: judgement({ proposedStatus: 'Closed', confidence: 0.9 }) }) === null)
+// Corroborated by a single-posting link, so these isolate the intake-year rule.
+const postingRecord = { application_link: 'https://jobs.lever.co/x/1b6f1d82-d459-4dea-8bc2-8d2ffe6f881a' }
 check('an unstated intake year no longer blocks Open Now',
-  decide({ primary: judgement({ proposedStatus: 'Open Now', confidence: 0.8, intakeYear: 0, intakeConsistent: true }) }) === 'Open Now',
+  decide({ record: postingRecord, primary: judgement({ proposedStatus: 'Open Now', confidence: 0.8, intakeYear: 0, intakeConsistent: true }) }) === 'Open Now',
   'the previous gate demanded intake_year === 2027, which most postings never print')
 check('a positively stated wrong intake year still blocks Open Now',
-  decide({ primary: judgement({ proposedStatus: 'Open Now', confidence: 0.95, intakeYear: 2026, intakeConsistent: false }) }) === null)
+  decide({ record: postingRecord, primary: judgement({ proposedStatus: 'Open Now', confidence: 0.95, intakeYear: 2026, intakeConsistent: false }) }) === null)
 check('Open Now still needs a direct application route',
-  decide({ primary: judgement({ proposedStatus: 'Open Now', confidence: 0.95, directApplication: false }) }) === null)
+  decide({ record: postingRecord, primary: judgement({ proposedStatus: 'Open Now', confidence: 0.95, directApplication: false }) }) === null)
+
+// --- 12b. A model may not open a role on its own say-so alone ---------------
+// exactRoleFound and directApplication are the model's claims about its own
+// work. Trusting them unsupported opened 71 of 78 roles off generic careers
+// pages, which is the "marked open when it isn't" the user reported.
+const confidentOpen = judgement({ proposedStatus: 'Open Now', confidence: 0.95 })
+
+check('a model alone cannot open a role from a landing page',
+  decide({
+    role: { application_status: 'Not Yet Published', application_link: 'https://x.com/careers/early-careers' },
+    primary: confidentOpen,
+  }) === null,
+  'a generic careers page is not evidence a vacancy is open')
+check('a single-posting link corroborates the model',
+  decide({ record: postingRecord, primary: confidentOpen }) === 'Open Now')
+check('a page that states applications are open corroborates the model',
+  decide({
+    verdict: { ...noVerdict, pageSaysOpen: true },
+    primary: confidentOpen,
+  }) === 'Open Now')
+check('two independent providers corroborate each other',
+  decide({
+    primary: confidentOpen,
+    secondary: judgement({ provider: 'Second', proposedStatus: 'Open Now', confidence: 0.9 }),
+  }) === 'Open Now')
+check('an uncorroborated model leaves the stored status alone',
+  decideStatus({
+    role: { application_status: 'Not Yet Published', application_link: 'https://x.com/careers' },
+    record: {}, verdict: noVerdict, primary: confidentOpen, secondary: null, today: '2026-09-07',
+  }).status === null,
+  'no assertion, rather than a demotion or a false open')
+check('the deterministic board still outranks the corroboration rule',
+  decide({ verdict: liveVerdict, primary: judgement({ proposedStatus: 'Unknown', confidence: 0.3 }) }) === 'Open Now',
+  'a live listing is direct evidence and needs no further support')
 check('one provider alone cannot close a role when a second disagrees',
   decide({
     primary: judgement({ proposedStatus: 'Closed', confidence: 0.95 }),
@@ -587,6 +623,32 @@ check('the evidence trail is built from the status actually stored',
 check('the trail is written after the status is settled',
   verification.indexOf('update.source_verified = evidenceTrail') > verification.indexOf("update.application_status = 'Unknown'"),
   'building it earlier is what let the two disagree')
+
+// --- 12c. Telling one vacancy from a landing page ---------------------------
+const { isSpecificPosting } = await import('./verify/evidence.mjs')
+
+for (const url of [
+  'https://astonmartinf1.pinpointhq.com/postings/656c5932-efd4-450d-baaf-1493c4fe8a98',
+  'https://jobs.apple.com/en-gb/details/200682357/gpu-internships-design-verification',
+  'https://careers.bankofamerica.com/en-us/students/job-detail/14589/investment-banking-2027',
+  'https://jobs.smartrecruiters.com/McLarenRacingLtd1/744000147275399',
+  'https://jobs.lever.co/palantir/1b6f1d82-d459-4dea-8bc2-8d2ffe6f881a',
+  'https://www.motorsportjobs.com/en/job/industrial-placement-2027-2028-control-systems-jaguar-tcs-racing',
+]) {
+  check(`a single posting is recognised: ${url.slice(8, 58)}`, isSpecificPosting(url))
+}
+for (const url of [
+  'https://www.airbus.com/en/careers/students-and-graduates/interns/uk-industry-placement',
+  'https://www.alpine-cars.com/careers/early-careers',
+  'https://jobs.apple.com/en-gb/search?team=internships-STDNT-INTRN',
+  'https://astonmartinf1.pinpointhq.com/',
+  'https://careers.babcockinternational.com/emerging-talent/',
+  'https://careers.baesystems.com/locations/uk/internships/industrial-placements',
+  'https://www.redbullracing.com/int-en/projects/industrial-student-placements',
+  'not a url',
+]) {
+  check(`a landing page is not mistaken for a posting: ${String(url).slice(0, 52)}`, !isSpecificPosting(url))
+}
 
 // --- Result -----------------------------------------------------------------
 

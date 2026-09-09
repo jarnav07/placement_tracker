@@ -607,6 +607,10 @@ export async function gatherEvidence(role) {
  */
 export function deterministicVerdict(role, evidence) {
   const { signals, board, postingSignals, posting } = evidence
+  // Independent of any model: did a fetched page actually say applications are
+  // open, and did it say so without also saying they have closed?
+  const pageSaysOpen = (signals.openSignal === true && signals.closedSignal !== true)
+    || (postingSignals?.openSignal === true && postingSignals?.closedSignal !== true)
   const intake2027 = signals.has2027 || signals.hasCycle2027
     || postingSignals?.has2027 || postingSignals?.hasCycle2027
     || /\b2027\b/.test(board?.job?.title || '')
@@ -628,6 +632,7 @@ export function deterministicVerdict(role, evidence) {
         // employers take listings down once a cycle closes.
         confidence: intake2027 ? 0.95 : 0.82,
         intakeConfirmed: Boolean(intake2027),
+        pageSaysOpen,
         applicationUrl: board.job.url,
         reason: `The exact tracked role is live on the employer's ${board.boardType} board as "${board.job.title}"`
           + ` (${board.liveCount} live postings queried at ${board.boardUrl})`
@@ -638,6 +643,7 @@ export function deterministicVerdict(role, evidence) {
       status: null,
       confidence: 0,
       intakeConfirmed: Boolean(intake2027),
+      pageSaysOpen,
       applicationUrl: '',
       reason: `The exact role appears on the ${board.boardType} board as "${board.job.title}" but`
         + `${graduateOnly ? ' it reads as a graduate/experienced vacancy' : ''}`
@@ -651,6 +657,7 @@ export function deterministicVerdict(role, evidence) {
       status: 'CLOSED',
       confidence: 0.8,
       intakeConfirmed: Boolean(intake2027),
+      pageSaysOpen,
       applicationUrl: '',
       reason: `The employer's ${board.boardType} board was enumerated in full (${board.liveCount} live postings)`
         + ' and the exact tracked role is absent, with no similarly named posting.',
@@ -660,16 +667,17 @@ export function deterministicVerdict(role, evidence) {
   // Page text only. A contiguous role-title match plus an unambiguous signal.
   const exactRole = signals.titleContiguous && signals.titleMatched
   if (exactRole && signals.student && intake2027 && signals.openSignal && !signals.closedSignal) {
-    return { status: 'OPEN_NOW', confidence: 0.85, intakeConfirmed: true, applicationUrl: '', reason: 'The tracked vacancy page names the exact role, the 2027 student intake and an open application route.' }
+    return { status: 'OPEN_NOW', confidence: 0.85, intakeConfirmed: true, pageSaysOpen, applicationUrl: '', reason: 'The tracked vacancy page names the exact role, the 2027 student intake and an open application route.' }
   }
   if (exactRole && signals.student && intake2027 && signals.closedSignal && !signals.openSignal) {
-    return { status: 'CLOSED', confidence: 0.85, intakeConfirmed: true, applicationUrl: '', reason: 'The tracked vacancy page names the exact 2027 role and states that applications are closed.' }
+    return { status: 'CLOSED', confidence: 0.85, intakeConfirmed: true, pageSaysOpen, applicationUrl: '', reason: 'The tracked vacancy page names the exact 2027 role and states that applications are closed.' }
   }
 
   return {
     status: null,
     confidence: 0,
     intakeConfirmed: Boolean(intake2027),
+    pageSaysOpen,
     applicationUrl: '',
     reason: board.ok
       ? `The ${board.boardType} board was queried (${board.liveCount} live postings) without a decisive match.`
@@ -730,3 +738,54 @@ export function evidencePageText(evidence, perPage = 6000, total = 18000) {
 }
 
 export { toIsoDate }
+
+/**
+ * Does this URL point at ONE vacancy, or at a landing page listing many?
+ *
+ * This is the difference between "you can apply to this today" and "this
+ * employer has an early-careers section". AGENTS.md has always said a generic
+ * careers page is not evidence a role is open; this makes that machine-checkable
+ * so a model cannot assert it away.
+ *
+ * Deliberately conservative: it answers "is this unambiguously one posting?",
+ * and a false "no" only costs corroboration from another signal.
+ */
+export function isSpecificPosting(url) {
+  let parsed
+  try { parsed = new URL(String(url ?? '')) } catch { return false }
+
+  const path = parsed.pathname.replace(/\/+$/, '')
+  if (!path || path === '/') return false
+
+  // A search or results page lists vacancies; it is not one of them.
+  if (/\/(search|results|browse|jobs?-search)$/i.test(path)) return false
+  if (parsed.search && /(^|&)(q|query|search|keyword|team|category)=/i.test(parsed.search.slice(1))) return false
+
+  const segments = path.split('/').filter(Boolean)
+  const last = segments[segments.length - 1] ?? ''
+
+  // A landing page for a programme or a cohort, however deep the path.
+  if (/^(careers?|jobs?|vacancies|opportunities|early-careers?|students?|graduates?|undergraduates?|internships?|placements?|emerging-talent|apply|openings|roles)$/i.test(last)) {
+    return false
+  }
+
+  // An identifier is what makes a URL point at one posting: a numeric id, a
+  // UUID, or a long opaque token, anywhere in the path.
+  const hasId = segments.some(segment =>
+    /^\d{4,}$/.test(segment)
+    || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment)
+    || /^[0-9a-f]{16,}$/i.test(segment)
+    || /[-_]\d{5,}$/.test(segment)
+    || /^\d{6,}/.test(segment))
+  if (hasId) return true
+
+  // Otherwise a posting-shaped path with a descriptive slug: /job/<slug>,
+  // /postings/<slug>, /job-detail/<slug>, /vacancy/<slug>.
+  const postingSegment = segments.findIndex(segment =>
+    /^(job|jobs|posting|postings|vacancy|vacancies|job-detail|jobdetail|opening|position)$/i.test(segment))
+  if (postingSegment !== -1 && segments.length > postingSegment + 1) {
+    const slug = segments[postingSegment + 1]
+    return slug.length >= 8 && /[-_]/.test(slug)
+  }
+  return false
+}

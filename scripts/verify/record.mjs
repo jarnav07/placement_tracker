@@ -21,6 +21,7 @@
 // check — which cannot hallucinate — carry a decision on its own.
 
 import { toIsoDate, toDatedValue, openingHasArrived, daysUntil } from './dates.mjs'
+import { isSpecificPosting } from './evidence.mjs'
 
 export const TARGET_YEAR = 2027
 
@@ -243,15 +244,49 @@ export function decideStatus({ role, record, verdict, primary, secondary, today 
     && !intakeRefuted(p))
 
   if (openBacked.length && !boardAbsent) {
-    // A single provider may open a role only when it found the actual
-    // application route. Two independent providers agreeing is stronger still.
+    // `exactRoleFound` and `directApplication` are the model's claims ABOUT ITS
+    // OWN WORK. On their own they opened 71 of 78 roles from nothing more than a
+    // reading of a generic careers page — the precise failure AGENTS.md warns
+    // about. "Open Now" is the claim that makes the user stop and apply, so it
+    // needs one corroborating fact the model did not author:
+    //
+    //   a) a link that unambiguously addresses ONE vacancy, or
+    //   b) a fetched page that itself says applications are open, or
+    //   c) a second provider reaching the same conclusion independently.
+    const postingUrl = [
+      ...openBacked.map(p => p.applicationUrl),
+      record?.application_link,
+      role.application_link,
+    ].find(url => url && isSpecificPosting(url))
+
+    const corroboration = postingUrl
+      ? `the application link addresses a single posting (${postingUrl})`
+      : verdict.pageSaysOpen
+        ? 'the tracked page itself states applications are open'
+        : openBacked.length > 1
+          ? 'two providers reached this independently'
+          : null
+
+    if (!corroboration) {
+      return {
+        status: null,
+        confidence: 0,
+        reason: `${openBacked.map(p => p.provider).join(' and ')} judged this open, but nothing outside that judgement`
+          + ' supports it: no applicant tracking system listed the role, the tracked link points at a landing page'
+          + ' rather than one vacancy, and no fetched page states that applications are open.'
+          + ' Leaving the status unchanged rather than telling you to apply.',
+        applicationUrl: '',
+      }
+    }
+
     const confidence = Math.max(...openBacked.map(p => p.confidence))
     return {
       status: 'Open Now',
       confidence: openBacked.length > 1 ? Math.min(1, confidence + 0.05) : confidence,
       reason: `${openBacked.map(p => p.provider).join(' and ')} found a live application route for the exact 2027 role`
-        + `${openBacked.length > 1 ? ', independently of each other' : ''}. ${openBacked[0].evidenceSummary}`,
-      applicationUrl: '',
+        + `${openBacked.length > 1 ? ', independently of each other' : ''}, and ${corroboration}.`
+        + ` ${openBacked[0].evidenceSummary}`,
+      applicationUrl: postingUrl ?? '',
     }
   }
 
