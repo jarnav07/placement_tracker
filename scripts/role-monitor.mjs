@@ -7,21 +7,9 @@
 //
 //   npm run monitor
 
-import { createClient } from '@supabase/supabase-js'
+import { connect } from './verify/supabase.mjs'
 
-const env = name => (process.env[name] || '').trim().replace(/^['"]|['"]$/g, '')
-const supabaseUrl = (env('SUPABASE_URL') || env('VITE_SUPABASE_URL')).replace(/\/$/, '')
-const supabaseKey = env('SUPABASE_SERVICE_ROLE_KEY')
-
-if (!supabaseUrl || !supabaseKey) {
-  console.error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.')
-  process.exit(1)
-}
-
-const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-  realtime: { enabled: false }
-})
+const supabase = connect()
 
 const TIMEOUT_MS = 15000
 const CONCURRENCY = 6

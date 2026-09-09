@@ -10,27 +10,10 @@
 //   - application_link    (only for a confirmed OPEN_NOW exact-role application page)
 //   - source_date_checked / source_verified (verification trail)
 
-import { createClient } from '@supabase/supabase-js'
+import { connect } from './verify/supabase.mjs'
 import { verifyPlacement, TODAY, useAzure, useGemini } from './placement-verifier.mjs'
 
-const rawSupabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '')
-  .trim().replace(/^['"]|['"]$/g, '')
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^['"]|['"]$/g, '')
-
-if (!rawSupabaseUrl || !supabaseKey) {
-  console.error('Missing SUPABASE_URL (or VITE_SUPABASE_URL) or SUPABASE_SERVICE_ROLE_KEY.')
-  process.exit(1)
-}
-
-const supabaseUrl = new URL(rawSupabaseUrl)
-supabaseUrl.pathname = ''
-supabaseUrl.search = ''
-supabaseUrl.hash = ''
-
-const supabase = createClient(supabaseUrl.toString().replace(/\/$/, ''), supabaseKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-  realtime: { enabled: false }
-})
+const supabase = connect()
 
 // Keep API-assisted runs under provider rate limits. A purely deterministic run
 // only touches employer sites and can go faster.

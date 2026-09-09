@@ -26,7 +26,7 @@
 // failure in source_verified. Overwriting a known-good status because an API call
 // timed out loses real information.
 
-import { createClient } from '@supabase/supabase-js'
+import { connect } from './verify/supabase.mjs'
 
 import { gatherEvidence, deterministicVerdict } from './verify/evidence.mjs'
 import {
@@ -38,18 +38,12 @@ import { openingIsDue, daysUntil, todayIso } from './verify/dates.mjs'
 
 const env = name => (process.env[name] || '').trim().replace(/^['"]|['"]$/g, '')
 
-const supabaseUrl = (env('SUPABASE_URL') || env('VITE_SUPABASE_URL')).replace(/\/$/, '')
-const supabaseKey = env('SUPABASE_SERVICE_ROLE_KEY')
-if (!supabaseUrl || !supabaseKey) throw new Error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.')
 if (!geminiConfigured && !azureConfigured) {
   throw new Error('No verification provider configured. Set VERTEX_API_KEY (Vertex AI) or GEMINI_API_KEY (AI Studio)'
     + ' for the primary verifier, and/or the AZURE_OPENAI_* secrets for the secondary.')
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-  realtime: { enabled: false },
-})
+const supabase = connect()
 
 const TODAY = todayIso()
 const MAX_CONCURRENT = Number(env('AUDIT_CONCURRENCY') || 2)

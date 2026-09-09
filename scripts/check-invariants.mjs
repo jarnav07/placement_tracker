@@ -535,6 +535,39 @@ check('a truncated response is reported as truncation',
   gemini.includes("finishReason === 'MAX_TOKENS'"),
   'MAX_TOKENS read as malformed JSON is what made this look like a bad API key')
 
+// --- 9d. Supabase connection ------------------------------------------------
+// SUPABASE_URL is commonly stored as the REST endpoint, because that is what the
+// dashboard shows beside the keys. The client appends its own /rest/v1, so the
+// request becomes /rest/v1/rest/v1/placements and PostgREST returns PGRST125.
+// Verification died on its first query this way while discovery, which stripped
+// the path, kept working — so every script now shares one connector.
+const { projectUrl } = await import('./verify/supabase.mjs')
+
+for (const [input, want] of [
+  ['https://abc.supabase.co', 'https://abc.supabase.co'],
+  ['https://abc.supabase.co/', 'https://abc.supabase.co'],
+  ['https://abc.supabase.co/rest/v1/', 'https://abc.supabase.co'],
+  ['https://abc.supabase.co/rest/v1', 'https://abc.supabase.co'],
+  ['  "https://abc.supabase.co/rest/v1/"  ', 'https://abc.supabase.co'],
+  ['abc.supabase.co', 'https://abc.supabase.co'],
+  ['https://abc.supabase.co/rest/v1/?apikey=x', 'https://abc.supabase.co'],
+  ['', ''],
+]) {
+  check(`projectUrl reduces ${JSON.stringify(input.trim()) || 'an empty value'} to its origin`,
+    projectUrl(input) === want, `got ${projectUrl(input)}`)
+}
+
+const CLIENT_SCRIPTS = [
+  'scripts/placement-verification.mjs', 'scripts/apply-scheduled-openings.mjs',
+  'scripts/role-monitor.mjs', 'scripts/placement-audit.mjs', 'scripts/placement-discovery.mjs',
+]
+for (const file of CLIENT_SCRIPTS) {
+  const source = read(file)
+  check(`${file} builds its client through the shared connector`,
+    source.includes("from './verify/supabase.mjs'") && !source.includes('createClient('),
+    'a local createClient can miss the REST-endpoint guard')
+}
+
 // --- Result -----------------------------------------------------------------
 
 if (failures.length) {

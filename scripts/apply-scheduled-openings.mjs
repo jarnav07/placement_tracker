@@ -24,21 +24,11 @@
 // `opened_at`, which drives the "new" marker in the UI, is set by a Postgres
 // trigger when the status becomes "Open Now" — this script never writes it.
 
-import { createClient } from '@supabase/supabase-js'
+import { connect } from './verify/supabase.mjs'
 import { toDatedValue, daysUntil, todayIso } from './verify/dates.mjs'
 
 const env = name => (process.env[name] || '').trim().replace(/^['"]|['"]$/g, '')
 
-/** Built inside `main` so the decision rule below can be imported without credentials. */
-function connect() {
-  const supabaseUrl = (env('SUPABASE_URL') || env('VITE_SUPABASE_URL')).replace(/\/$/, '')
-  const supabaseKey = env('SUPABASE_SERVICE_ROLE_KEY')
-  if (!supabaseUrl || !supabaseKey) throw new Error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY.')
-  return createClient(supabaseUrl, supabaseKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-    realtime: { enabled: false },
-  })
-}
 
 const TODAY = todayIso()
 const DRY_RUN = env('OPENINGS_DRY_RUN') === 'true'

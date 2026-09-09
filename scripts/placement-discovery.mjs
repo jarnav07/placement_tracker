@@ -4,28 +4,11 @@
 // verifier use deterministic evidence first and Azure only when that evidence is
 // ambiguous. It never deletes rows or recreates Not Interested roles.
 
-import { createClient } from '@supabase/supabase-js'
+import { connect } from './verify/supabase.mjs'
 import { verifyPlacement, TODAY, TARGET_INTAKE } from './placement-verifier.mjs'
 import { classifyOpportunity, looksLikeStudentRole } from './role-quality.mjs'
 
-const rawSupabaseUrl = (process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '')
-  .trim().replace(/^['"]|['"]$/g, '')
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim().replace(/^['"]|['"]$/g, '')
-
-if (!rawSupabaseUrl || !supabaseKey) {
-  console.error('Missing SUPABASE_URL (or VITE_SUPABASE_URL) or SUPABASE_SERVICE_ROLE_KEY.')
-  process.exit(1)
-}
-
-const supabaseUrl = new URL(rawSupabaseUrl)
-supabaseUrl.pathname = ''
-supabaseUrl.search = ''
-supabaseUrl.hash = ''
-
-const supabase = createClient(supabaseUrl.toString().replace(/\/$/, ''), supabaseKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-  realtime: { enabled: false }
-})
+const supabase = connect()
 
 const FETCH_TIMEOUT_MS = 15000
 const MAX_SOURCE_PAGES = 120
