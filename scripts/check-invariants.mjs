@@ -512,8 +512,22 @@ for (const [label, payload] of [['empty output', '   '], ['no object at all', 'n
   check(`model JSON parser still rejects ${label}`, threw)
 }
 check('the provider health check uses the tolerant parser, not a bare JSON.parse',
-  gemini.includes('parseJsonLoose(structured.text)') && !/\n\s*JSON\.parse\(structured\.text\)/.test(gemini),
+  /parseJsonLoose\(structured\.text/.test(gemini) && !/\n\s*JSON\.parse\(structured\.text\)/.test(gemini),
   'a strict parse here silently disables every nightly verification run')
+
+// Gemini 2.5 models reason before answering. A structured call that leaves
+// thinking on can spend its whole budget reasoning and get cut off mid-preamble,
+// which is exactly how the nightly pass died: 256 output tokens, and the reply
+// never reached the JSON.
+for (const marker of ['thinkingConfig: { thinkingBudget: 0 }', 'maxOutputTokens: 8192', 'maxOutputTokens: 2048']) {
+  check(`structured Gemini calls set ${marker}`, gemini.includes(marker))
+}
+check('no structured Gemini call is left on a starvation budget',
+  !/maxOutputTokens: (?:256|512)\b/.test(gemini),
+  'a thinking model needs room for the object after its reasoning')
+check('a truncated response is reported as truncation',
+  gemini.includes("finishReason === 'MAX_TOKENS'"),
+  'MAX_TOKENS read as malformed JSON is what made this look like a bad API key')
 
 // --- Result -----------------------------------------------------------------
 

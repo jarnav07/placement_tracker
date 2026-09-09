@@ -386,7 +386,11 @@ async function callGemini(model, body, timeoutMs) {
         const blocked = parsed?.promptFeedback?.blockReason || candidate?.finishReason
         throw new Error(`Gemini returned no text${blocked ? ` (${blocked})` : ''}`)
       }
-      return { text, grounding: candidate?.groundingMetadata ?? null }
+      return {
+        text,
+        grounding: candidate?.groundingMetadata ?? null,
+        finishReason: candidate?.finishReason ?? null,
+      }
     } catch (error) {
       lastError = error?.message ?? String(error)
       const transient = error?.name === 'AbortError' || /fetch failed|network|ECONN|socket|terminated/i.test(lastError)
@@ -457,13 +461,17 @@ async function extract(model, brief, prompt) {
     }],
     generationConfig: {
       temperature: 0,
-      maxOutputTokens: 4096,
+      // The reasoning happened in the grounded research pass; this call only has
+      // to format that brief as JSON. Leaving thinking on lets a 2.5 model spend
+      // the whole budget reasoning and get truncated before the object starts.
+      thinkingConfig: { thinkingBudget: 0 },
+      maxOutputTokens: 8192,
       responseMimeType: 'application/json',
       responseSchema: buildSchema(),
     },
   }
-  const { text } = await callGemini(model, body, EXTRACT_TIMEOUT_MS)
-  return parseJsonLoose(text)
+  const { text, finishReason } = await callGemini(model, body, EXTRACT_TIMEOUT_MS)
+  return parseJsonLoose(text, finishReason)
 }
 
 /**
@@ -475,9 +483,11 @@ async function extract(model, brief, prompt) {
  * Every call site must use this — a bare `JSON.parse` on a response that is
  * correct apart from a preamble reads as a broken provider.
  */
-export function parseJsonLoose(text) {
+export function parseJsonLoose(text, finishReason = null) {
   const raw = String(text ?? '').trim()
-  if (!raw) throw new Error('Gemini returned an empty response')
+  // MAX_TOKENS means the object was never finished, not that the model misbehaved.
+  const truncated = finishReason === 'MAX_TOKENS' ? ' (response hit MAX_TOKENS — raise maxOutputTokens)' : ''
+  if (!raw) throw new Error(`Gemini returned an empty response${truncated}`)
   try {
     return JSON.parse(raw)
   } catch {
@@ -490,7 +500,7 @@ export function parseJsonLoose(text) {
     const start = raw.indexOf('{')
     const end = raw.lastIndexOf('}')
     if (start === -1 || end <= start) {
-      throw new Error(`Gemini returned invalid JSON: ${raw.slice(0, 80)}`)
+      throw new Error(`Gemini returned invalid JSON${truncated}: ${raw.slice(0, 80)}`)
     }
     return JSON.parse(raw.slice(start, end + 1))
   }
@@ -568,7 +578,10 @@ export async function pingGemini() {
       contents: [{ role: 'user', parts: [{ text: `Summarise in one sentence: ${grounded.text.slice(0, 400)}` }] }],
       generationConfig: {
         temperature: 0,
-        maxOutputTokens: 256,
+        // Mirrors the extraction call: no thinking budget, and enough room that a
+        // preamble cannot crowd out the object.
+        thinkingConfig: { thinkingBudget: 0 },
+        maxOutputTokens: 2048,
         responseMimeType: 'application/json',
         responseSchema: {
           type: 'object',
@@ -580,7 +593,7 @@ export async function pingGemini() {
     }, EXTRACT_TIMEOUT_MS)
     // Parsed the same way the real extraction parses, so the probe cannot fail
     // over something verification would have handled.
-    const parsed = parseJsonLoose(structured.text)
+    const parsed = parseJsonLoose(structured.text, structured.finishReason)
     steps.push({
       step: 'structured output',
       ok: true,
