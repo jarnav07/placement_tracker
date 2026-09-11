@@ -17,7 +17,7 @@
 import fs from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { looksLikeStudentRole, classifyOpportunity } from './role-quality.mjs'
-import { parseDateText, toIsoDate, openingHasArrived, openingIsDue, daysUntil } from './verify/dates.mjs'
+import { parseDateText, toStoredDate, toDatedValue, openingHasArrived, openingIsDue, daysUntil } from './verify/dates.mjs'
 import { openingDecision } from './apply-scheduled-openings.mjs'
 import {
   detectBoard, queryBoardJobs, findRoleOnBoard, roleTitleWords, norm, deterministicVerdict,
@@ -261,9 +261,9 @@ for (const [input, expectedIso, expectedPrecision] of DATE_CASES) {
 }
 
 check('prose is never stored in a date column',
-  toIsoDate('Not published for 2027') === '' && toIsoDate('Vacancy dependent') === '' && toIsoDate('TBC') === '')
+  toStoredDate('Not published for 2027') === '' && toStoredDate('Vacancy dependent') === '' && toStoredDate('TBC') === '')
 check('a real date survives normalisation to ISO',
-  toIsoDate('4 September 2026') === '2026-09-04' && toIsoDate('2026-12-31') === '2026-12-31')
+  toStoredDate('4 September 2026') === '2026-09-04' && toStoredDate('2026-12-31') === '2026-12-31')
 check('daysUntil counts whole days from today, in both directions',
   daysUntil('2026-09-10', '2026-09-07') === 3 && daysUntil('2026-09-01', '2026-09-07') === -6
   && daysUntil('2026-09-07', '2026-09-07') === 0 && daysUntil('Vacancy dependent', '2026-09-07') === null)
@@ -283,6 +283,48 @@ check('a vague opening date still marks the role due for re-verification',
   openingIsDue('November 2026', '2026-11-15') === true && openingIsDue('November 2026', '2026-10-15') === false)
 check('a stale opening date cannot resurrect a role from an earlier cycle',
   openingHasArrived('2026-01-01', '2026-09-07') === false)
+
+// The guard above is tested on the ORIGINAL text, but the automation never sees
+// that text: it reads back whatever the verifier wrote to the database. So the
+// round trip through storage is the thing that actually has to hold. It did not
+// — a month was stored as YYYY-MM-01, which reads back as a day, and 39 rows
+// were flipped to "Open Now" with the note "the employer published <1st of the
+// month> as the day applications open". The employer had published a month.
+check('a month or season opening date keeps its precision through storage',
+  ['November 2026', 'Autumn 2026', 'October 2026', 'September 2026']
+    .every(text => toDatedValue(toStoredDate(text)).precision !== 'day'),
+  'stored as the 1st of the month, it reads back as a day-precision date')
+check('a stored month-precision opening date still never opens a role',
+  openingHasArrived(toStoredDate('September 2026'), '2026-09-11') === false
+  && openingHasArrived(toStoredDate('Autumn 2026'), '2026-09-11') === false,
+  'the auto-opening guard is defeated by the storage format')
+check('a day-precision opening date survives storage and still opens the role',
+  openingHasArrived(toStoredDate('7 September 2026'), '2026-09-07') === true
+  && openingHasArrived(toStoredDate('2026-09-06'), '2026-09-07') === true)
+// The browser parses the very same free-text columns, so it is the third
+// implementation of this rule and drifts like the other two. It used to lean on
+// `Date.parse` for everything that was not ISO, which answers confidently and
+// wrongly here: "Autumn 2026" and "Summer 2026" both came back as 1 January
+// 2026, and "Not published for 2027" came back as 1 January 2027.
+const utils = read('src/lib/utils.ts')
+const browserParseDate = utils.slice(utils.indexOf('export function parseDate'))
+  .slice(0, utils.slice(utils.indexOf('export function parseDate')).indexOf('\n}\n') + 3)
+check('the browser anchors seasons to the same months as the SQL',
+  squash(utils).includes('spring: 3, summer: 6, autumn: 9, fall: 9, winter: 12')
+  && rankingMigration.includes("WHEN 'spring' THEN 3 WHEN 'summer' THEN 6 WHEN 'autumn' THEN 9 WHEN 'fall' THEN 9 ELSE 12"),
+  'a season must anchor to its first month in both implementations')
+check('the browser never falls back to Date.parse for a date column',
+  browserParseDate.length > 200 && !browserParseDate.includes('Date.parse('),
+  'Date.parse reads "Autumn 2026" as 1 January 2026 and invents a date out of prose')
+check('the browser refuses prose that asserts there is no date',
+  browserParseDate.includes('NO_DATE.test(text)') && utils.includes('vacancy[- ]dependent'),
+  'placement_text_says_no_date() has no counterpart in the browser')
+
+check('a stored month-precision date still sorts and still falls due',
+  toDatedValue(toStoredDate('November 2026')).iso === '2026-11-01'
+  && openingIsDue(toStoredDate('November 2026'), '2026-11-15') === true
+  && daysUntil(toStoredDate('November 2026'), '2026-11-15') === -14,
+  'month dates must keep working for sorting and the deadline term')
 
 const OPENING_CASES = [
   [{ application_status: 'Opening Soon', exact_opening_date: '2026-09-05', exact_deadline: '2026-10-30' }, true,

@@ -86,19 +86,84 @@ export function slug(value: string): string {
 // filtering.ts imports ranking.ts. `src/lib/filtering.ts` re-exports them so the
 // components' existing imports keep working.
 
+const MONTH_NAMES = 'jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec'
+const MONTH_NUMBER: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+}
+/** Seasons anchor to their first month, the same anchors the SQL uses. */
+const SEASON_MONTH: Record<string, number> = { spring: 3, summer: 6, autumn: 9, fall: 9, winter: 12 }
+
+/** Text that asserts there is no date, even when a year sits next to it. */
+const NO_DATE =
+  /\b(not\s+(yet\s+)?(published|stated|announced|available|applicable|specified|confirmed|disclosed|listed)|no\s+(specific|published|annual|confirmed)|vacancy[- ]dependent|role[- ]dependent|year[- ]round|rolling|ongoing|continuous|tbc|tba|to be confirmed|to be announced|unknown|unspecified|n\/a|none)\b/i
+
 /**
  * Parses the free-text date columns. Returns null rather than NaN.
  *
  * The 2026-09-07 migration normalises day-precision values to ISO and strips
- * prose that holds no date, but month-precision text ("November 2026") is kept
- * deliberately, so this still has to handle it.
+ * prose that holds no date, but month- and season-precision text ("November
+ * 2026", "Autumn 2026") is kept deliberately, so this still has to handle it.
+ *
+ * Every pattern is explicit, and there is no `Date.parse` fallback, because
+ * `Date.parse` answers confidently and wrongly on exactly the values this
+ * column holds: "Autumn 2026" and "Summer 2026" both came back as 1 January
+ * 2026 (V8 ignores the word it does not know and keeps the year), so a season
+ * read as a deadline already in the past and took the -25 passed-deadline
+ * penalty. "Not published for 2027" came back as 1 January 2027 — a deadline
+ * invented out of prose that says there is no deadline. `placement_parse_date()`
+ * refuses both; this now refuses both too.
  */
 export function parseDate(value: string | null | undefined): number | null {
   if (!value) return null
-  const iso = value.match(/(20\d{2})-(\d{1,2})-(\d{1,2})/)
-  if (iso) return Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]))
-  const parsed = Date.parse(value)
-  return Number.isNaN(parsed) ? null : parsed
+  const text = String(value).trim()
+  if (!text) return null
+
+  const at = (year: number, month: number, day: number): number | null => {
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null
+    const stamp = Date.UTC(year, month - 1, day)
+    const back = new Date(stamp)
+    // Rejects 31 February and friends rather than letting them roll over.
+    return back.getUTCMonth() === month - 1 && back.getUTCDate() === day ? stamp : null
+  }
+
+  // --- Day precision ---------------------------------------------------------
+  const iso = text.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/)
+  if (iso) {
+    const parsed = at(Number(iso[1]), Number(iso[2]), Number(iso[3]))
+    if (parsed !== null) return parsed
+  }
+  const dmy = text.match(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(?:of\\s+)?(${MONTH_NAMES})[a-z]*\\.?,?\\s+(20\\d{2})\\b`, 'i'))
+  if (dmy) {
+    const parsed = at(Number(dmy[3]), MONTH_NUMBER[dmy[2].slice(0, 3).toLowerCase()], Number(dmy[1]))
+    if (parsed !== null) return parsed
+  }
+  const mdy = text.match(new RegExp(`\\b(${MONTH_NAMES})[a-z]*\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(20\\d{2})\\b`, 'i'))
+  if (mdy) {
+    const parsed = at(Number(mdy[3]), MONTH_NUMBER[mdy[1].slice(0, 3).toLowerCase()], Number(mdy[2]))
+    if (parsed !== null) return parsed
+  }
+  // 04/09/2026, read day-first: the tracker is UK-based.
+  const slashed = text.match(/\b(\d{1,2})[/.-](\d{1,2})[/.-](20\d{2})\b/)
+  if (slashed) {
+    const parsed = at(Number(slashed[3]), Number(slashed[2]), Number(slashed[1]))
+    if (parsed !== null) return parsed
+  }
+
+  // Prose that asserts there is no date beats any month or season below it.
+  if (NO_DATE.test(text)) return null
+
+  // --- Month precision, anchored to the 1st ----------------------------------
+  const monthYear = text.match(new RegExp(`\\b(${MONTH_NAMES})[a-z]*\\.?\\s+(20\\d{2})\\b`, 'i'))
+  if (monthYear) return at(Number(monthYear[2]), MONTH_NUMBER[monthYear[1].slice(0, 3).toLowerCase()], 1)
+  const isoMonth = text.match(/\b(20\d{2})-(\d{1,2})\b/)
+  if (isoMonth) return at(Number(isoMonth[1]), Number(isoMonth[2]), 1)
+
+  // --- Season precision, anchored to its first month -------------------------
+  const season = text.match(/\b(spring|summer|autumn|fall|winter)\s+(20\d{2})\b/i)
+  if (season) return at(Number(season[2]), SEASON_MONTH[season[1].toLowerCase()], 1)
+
+  return null
 }
 
 /**

@@ -12,7 +12,7 @@
 // override them. A board that cannot be queried yields no assertion at all —
 // silence, never a guess.
 
-import { toIsoDate } from './dates.mjs'
+import { toStoredDate } from './dates.mjs'
 
 export const TODAY = new Date().toISOString().slice(0, 10)
 export const TARGET_INTAKE = '2027'
@@ -790,7 +790,7 @@ export function evidencePageText(evidence, perPage = 6000, total = 18000) {
   return parts.join('\n\n').slice(0, total)
 }
 
-export { toIsoDate }
+export { toStoredDate }
 
 /**
  * Does this URL point at ONE vacancy, or at a landing page listing many?

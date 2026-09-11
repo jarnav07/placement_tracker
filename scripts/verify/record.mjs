@@ -20,7 +20,7 @@
 // intake year as a contradiction, and lets the deterministic applicant-tracking
 // check — which cannot hallucinate — carry a decision on its own.
 
-import { toIsoDate, toDatedValue, openingHasArrived, daysUntil } from './dates.mjs'
+import { toStoredDate, toDatedValue, openingHasArrived, daysUntil } from './dates.mjs'
 import { isSpecificPosting } from './evidence.mjs'
 
 export const TARGET_YEAR = 2027
@@ -156,7 +156,7 @@ export function normaliseRecord(raw, provider) {
     // Date columns only ever receive ISO dates. Prose such as "Not published for
     // 2027" is discarded here rather than written into a date column, where it
     // breaks sorting, the deadline weighting and the automatic opening rule.
-    else if (DATE_FIELDS.includes(field)) record[field] = toIsoDate(raw?.[field])
+    else if (DATE_FIELDS.includes(field)) record[field] = toStoredDate(raw?.[field])
     else record[field] = asString(raw?.[field])
   }
 
@@ -483,4 +483,4 @@ export function reconcileDeadline({ status, deadline, boardLive, today }) {
   }
 }
 
-export { toIsoDate, toDatedValue }
+export { toStoredDate, toDatedValue }
