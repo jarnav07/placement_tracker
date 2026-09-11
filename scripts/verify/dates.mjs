@@ -119,27 +119,53 @@ export function parseDateText(value) {
 }
 
 /**
- * The value to store in a date column: ISO when a date was found, '' otherwise.
- * Prose such as "Not published for 2027" is discarded rather than stored — it is
- * not a date, and keeping it there breaks sorting, the deadline weighting and the
- * automatic opening rule.
+ * Text, anchored date and precision together, with the "there is no date"
+ * assertion already applied. Mirrors `placement_parse_date()` and
+ * `placement_date_precision()`, which are two functions over the same text.
  */
-export function toIsoDate(value) {
+function resolve(value) {
   const text = String(value ?? '').trim()
-  if (!text) return ''
+  const none = { text: '', iso: '', precision: 'none', approximate: false }
+  if (!text) return none
   const parsed = parseDateText(text)
-  if (!parsed.iso) return ''
+  if (!parsed.iso) return none
   // "Applications are not yet published; the programme normally starts September
   // 2027" contains a date but asserts there is none. Trust the assertion.
-  if (NO_DATE_RE.test(text) && parsed.precision !== 'day') return ''
-  return parsed.iso
+  if (NO_DATE_RE.test(text) && parsed.precision !== 'day') return none
+  return { text, ...parsed }
 }
 
-/** Same, but keeps the precision so callers can refuse to act on a vague date. */
+/**
+ * The value to store in a date column.
+ *
+ * A day-precision value is normalised to ISO. A MONTH or SEASON value keeps its
+ * text — "October 2026" is stored as "October 2026", not as "2026-10-01".
+ * Prose that holds no date is discarded.
+ *
+ * Storing a month as the 1st of that month is lossy in the one direction that
+ * matters: the automation never sees the original text, only what was written
+ * here, and "2026-10-01" reads back as a specific day. That is how a month
+ * became "the day applications open" for 39 rows. The precision has to survive
+ * the round trip, so the text does.
+ *
+ * This mirrors the migration exactly: step 2b rewrites only day-precision values
+ * to ISO, step 2c clears only pure prose, and month and season text is kept.
+ */
+export function toStoredDate(value) {
+  const resolved = resolve(value)
+  if (resolved.precision === 'none') return ''
+  return resolved.precision === 'day' ? resolved.iso : resolved.text
+}
+
+/**
+ * The anchored date plus its true precision, so callers can refuse to act on a
+ * vague one. Month and season anchor to the 1st of the month for sorting and for
+ * the deadline term — exactly as `placement_parse_date()` does — but they are
+ * reported as 'month' and 'season', never as 'day'.
+ */
 export function toDatedValue(value) {
-  const iso = toIsoDate(value)
-  if (!iso) return { iso: '', precision: 'none', approximate: false }
-  return { ...parseDateText(value), iso }
+  const { iso, precision, approximate } = resolve(value)
+  return { iso, precision, approximate }
 }
 
 export function todayIso(now = new Date()) {
@@ -148,7 +174,10 @@ export function todayIso(now = new Date()) {
 
 /** Whole days from `today` to `value`. Negative when the date has passed. */
 export function daysUntil(value, today = todayIso()) {
-  const iso = toIsoDate(value)
+  // The anchored date, not the stored text: a month-precision deadline still
+  // has to sort and still has to feed the deadline term, the same way
+  // `placement_deadline_days()` reads it through `placement_parse_date()`.
+  const { iso } = toDatedValue(value)
   if (!iso) return null
   const at = Date.parse(`${iso}T00:00:00Z`)
   const from = Date.parse(`${today}T00:00:00Z`)
