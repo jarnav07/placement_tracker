@@ -316,6 +316,14 @@ check('the browser anchors seasons to the same months as the SQL',
 check('the browser never falls back to Date.parse for a date column',
   browserParseDate.length > 200 && !browserParseDate.includes('Date.parse('),
   'Date.parse reads "Autumn 2026" as 1 January 2026 and invents a date out of prose')
+// A company name is not a location. "L3Harris Technologies UK" posts roles in
+// Florida and Colorado, and while the name sat in the same string as the country
+// the "UK" in it won and both filed as UK roles — hiding a US-Person-only
+// restriction from a UK applicant instead of surfacing it.
+check('the region filter reads country and city before the company name',
+  squash(read('src/lib/filtering.ts')).includes('regionOf(`${lower(p.country)} ${lower(p.city)}`) ?? regionOf(lower(p.company))'),
+  'a company name containing a place must not override a stated country')
+
 check('the browser refuses prose that asserts there is no date',
   browserParseDate.includes('NO_DATE.test(text)') && utils.includes('vacancy[- ]dependent'),
   'placement_text_says_no_date() has no counterpart in the browser')

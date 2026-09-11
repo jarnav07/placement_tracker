@@ -54,15 +54,29 @@ const ASIA = /\b(afghanistan|armenia|azerbaijan|bahrain|bangladesh|bhutan|brunei
 
 const lower = (value: string | null | undefined) => (value ?? '').trim().toLowerCase()
 
-/** Returns null when the location genuinely cannot be placed, rather than guessing "Europe". */
-export function countryGroup(p: Pick<Placement, 'country' | 'city' | 'company'>): CountryGroup | null {
-  const text = `${lower(p.country)} ${lower(p.city)} ${lower(p.company)}`
+function regionOf(text: string): CountryGroup | null {
   if (UK.test(text)) return 'UK'
   if (OCEANIA.test(text)) return 'Oceania'
   if (AMERICAS.test(text)) return 'America'
   if (ASIA.test(text)) return 'Asia'
   if (EUROPE.test(text)) return 'Europe'
   return null
+}
+
+/**
+ * Returns null when the location genuinely cannot be placed, rather than guessing "Europe".
+ *
+ * The company name is a LAST resort, never part of the first test. "L3Harris
+ * Technologies UK" runs postings in Palm Bay, Florida and at Schriever Space
+ * Force Base, Colorado; with the name in the same string as the country, the
+ * "UK" in it won the first test and filed both as UK roles. That is the one
+ * direction that matters here — a UK passport holder can apply to a UK role,
+ * and cannot apply to a US-Person-only one, so the region filter was hiding the
+ * restriction rather than showing it. The name is still consulted when country
+ * and city say nothing, which is what it was there for.
+ */
+export function countryGroup(p: Pick<Placement, 'country' | 'city' | 'company'>): CountryGroup | null {
+  return regionOf(`${lower(p.country)} ${lower(p.city)}`) ?? regionOf(lower(p.company))
 }
 
 export function sectorGroup(p: Pick<Placement, 'sector' | 'company' | 'engineering_area'>): SectorGroup {
