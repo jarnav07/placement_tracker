@@ -95,18 +95,36 @@ export { parseDate, daysUntil }
 // --- Views ---------------------------------------------------------------
 
 /**
+ * Has an application actually gone in?
+ *
+ * 'Saved' deliberately does NOT count. Saving a role is a bookmark — a note to
+ * come back to it — so a saved role belongs in Explore, where you can still act
+ * on it. Every stage from 'Applied' onwards means the application exists, and
+ * that includes the ones that ended: a rejected or withdrawn application is
+ * finished, not a fresh opportunity to surface again.
+ */
+export function hasApplied(p: Pick<Placement, 'app_status'>): boolean {
+  return p.app_status !== 'Not Applied' && p.app_status !== 'Saved'
+}
+
+/**
  * `archived` rows are links the crawler mistook for a vacancy. They are hidden
  * from EVERY view — there is deliberately no archive tab — but the rows are kept,
  * so a mis-archived role can be restored with a single SQL update.
  *
  * `not_interested` is the user's own rejection and keeps its own view.
+ *
+ * Explore ('opportunities') is what is still open to act on, so a role you have
+ * applied to drops out of it and lives in My applications instead. It is not
+ * lost: the applications view keeps it, and clearing `app_status` back to
+ * 'Not Applied' brings it straight back.
  */
 export function placementsForView(placements: Placement[], view: View): Placement[] {
   const real = placements.filter(p => !p.archived)
   switch (view) {
     case 'not-interested': return real.filter(p => p.not_interested)
     case 'applications': return real.filter(p => p.app_status !== 'Not Applied')
-    default: return real.filter(p => !p.not_interested)
+    default: return real.filter(p => !p.not_interested && !hasApplied(p))
   }
 }
 

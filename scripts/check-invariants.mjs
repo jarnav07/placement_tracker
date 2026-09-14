@@ -166,6 +166,18 @@ check('sorting does not de-duplicate by company',
   !/companyKey|seen\.has\(key\)/.test(filtering),
   'a previous version showed one card per company, hiding 270 of 378 roles')
 
+// Explore is what is still open to act on. A role you have applied to belongs in
+// My applications, not back on the board competing for attention.
+check('a role that has been applied to leaves the Explore view',
+  squash(filtering).includes("default: return real.filter(p => !p.not_interested && !hasApplied(p))"),
+  'Explore must exclude anything past Not Applied / Saved')
+check('saving a role keeps it in Explore',
+  squash(filtering).includes("p.app_status !== 'Not Applied' && p.app_status !== 'Saved'"),
+  'Saved is a bookmark, not an application — it must not hide the role')
+check('the applications view still shows every role with a stage set',
+  squash(filtering).includes("case 'applications': return real.filter(p => p.app_status !== 'Not Applied')"),
+  'a role dropped from Explore must still be reachable somewhere')
+
 // --- 5. Role-quality gate ---------------------------------------------------
 
 const SHOULD_REJECT = [
