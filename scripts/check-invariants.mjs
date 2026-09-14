@@ -771,6 +771,12 @@ check('discovery reports the seed pages that yielded nothing',
 check('a posting that states its own location does not inherit the seed country',
   /candidate\.locationFromPosting \? null : candidate\.country/.test(discoverySource),
   'three Palantir internships in Sydney, Seoul and Honolulu were filed as United Kingdom')
+check('the source-page budget rotates instead of truncating the same quarter every run',
+  /uniqueSources\.sort\(/.test(discoverySource)
+  && /\(start \+ i\) % uniqueSources\.length/.test(discoverySource)
+  && !/uniqueSources\.slice\(0, MAX_SOURCE_PAGES\)/.test(discoverySource),
+  'there are 484 tracked sources and a budget of 120: a fixed slice of an unordered '
+  + 'query never reaches the rest, which is how Alpine\'s whole 2027 campaign went unseen')
 
 // --- 12c. Telling one vacancy from a landing page ---------------------------
 const { isSpecificPosting } = await import('./verify/evidence.mjs')

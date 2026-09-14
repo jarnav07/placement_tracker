@@ -254,7 +254,25 @@ async function collectCandidates(sourcePages, byKey, byUrl, notInterested, cover
     }
   }
 
-  for (const source of uniqueSources.slice(0, MAX_SOURCE_PAGES)) {
+  // MAX_SOURCE_PAGES is a budget for ONE run, not a cap on what the tracker
+  // covers. There are 484 tracked source pages and the budget is 120, so a run
+  // reaches a quarter of them — and the rows arrive in whatever order Postgres
+  // returns them, with no ORDER BY, so the same arbitrary quarter was reached
+  // every time and the rest were never crawled at all. Alpine's Workday board
+  // sat outside the window while its whole 2027 campaign went live.
+  //
+  // Sorting makes the order stable, and rotating the window by the day means
+  // every source is crawled within ceil(484/120) = 4 days without raising the
+  // per-run cost. Keep both: sorting alone would freeze one quarter in place.
+  uniqueSources.sort((a, b) => (a.url < b.url ? -1 : a.url > b.url ? 1 : 0))
+  const dayIndex = Math.floor(Date.now() / 86_400_000)
+  const start = uniqueSources.length ? (dayIndex * MAX_SOURCE_PAGES) % uniqueSources.length : 0
+  const window = uniqueSources.length > MAX_SOURCE_PAGES
+    ? Array.from({ length: MAX_SOURCE_PAGES }, (_, i) => uniqueSources[(start + i) % uniqueSources.length])
+    : uniqueSources
+  console.log(`${uniqueSources.length} tracked source pages; crawling ${window.length} this run, starting at ${start}.`)
+
+  for (const source of window) {
     // An aggregator would lend this seed row's company to every employer's
     // vacancies listed on it.
     if (isAggregator(source.url)) {
