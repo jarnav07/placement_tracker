@@ -1,4 +1,4 @@
-import type { ApplicationStatus, OverallPriority } from './supabase'
+import type { AppStatus, ApplicationStatus, OverallPriority, Placement, PlacementPatch } from './supabase'
 
 export const PRIORITY_LABELS: Record<OverallPriority, string> = {
   APPLY_IMMEDIATELY: 'Apply now',
@@ -32,6 +32,81 @@ export const STATUS_COLORS: Record<ApplicationStatus, string> = {
   'Not Yet Published': '#64748b',
   'Closed': '#ef4444',
   'Unknown': '#64748b',
+}
+
+// --- The user's own pipeline -------------------------------------------------
+//
+// `app_status` is the only column on the board the user owns end to end, so the
+// applications view is built around it rather than around the ranking. These
+// three tables are the whole vocabulary: a colour, a sort order, and the ladder
+// an application actually climbs.
+
+export const STAGE_COLORS: Record<AppStatus, string> = {
+  'Not Applied': '#64748b',
+  'Saved': '#a78bfa',
+  'Applied': '#38bdf8',
+  'Assessment': '#22d3ee',
+  'Interview': '#818cf8',
+  'Final Interview': '#c084fc',
+  'Offer': '#fbbf24',
+  'Accepted': '#22c55e',
+  'Rejected': '#ef4444',
+  'Withdrawn': '#64748b',
+}
+
+/**
+ * Sort order for the applications view: furthest through the process first, and
+ * the two ways an application ends — rejected, withdrawn — last whatever stage
+ * they were reached from.
+ */
+export const STAGE_RANK: Record<AppStatus, number> = {
+  'Accepted': 0,
+  'Offer': 1,
+  'Final Interview': 2,
+  'Interview': 3,
+  'Assessment': 4,
+  'Applied': 5,
+  'Saved': 6,
+  'Not Applied': 7,
+  'Withdrawn': 8,
+  'Rejected': 9,
+}
+
+/** The ladder an application climbs, in order. Rejected and Withdrawn end it instead. */
+export const STAGE_LADDER: AppStatus[] = [
+  'Applied', 'Assessment', 'Interview', 'Final Interview', 'Offer', 'Accepted',
+]
+
+export const STAGE_ENDED: AppStatus[] = ['Rejected', 'Withdrawn']
+
+/**
+ * How far along the ladder a stage sits, as a step count. A rejected or
+ * withdrawn application keeps no step — it did not reach the end, it stopped.
+ */
+export function stageStep(stage: AppStatus): number | null {
+  const index = STAGE_LADDER.indexOf(stage)
+  return index === -1 ? null : index + 1
+}
+
+/**
+ * The patch that moves a role to `next`.
+ *
+ * There are now four places a stage can be set — the board's Save button, the
+ * mobile swipe, the applications card and the detail panel — and each was free
+ * to invent its own rule for `date_applied`. This is the only rule: the date is
+ * stamped the first time the role reaches a stage that means an application
+ * exists, and is never cleared afterwards. Un-applying used to wipe it, which
+ * threw away a date the user had typed in; a stage is reversible, the record of
+ * when you applied should not be collateral.
+ */
+export function stagePatch(next: AppStatus, current: Pick<Placement, 'date_applied'>): PlacementPatch {
+  const entersPipeline = next !== 'Not Applied' && next !== 'Saved'
+  return {
+    app_status: next,
+    date_applied: entersPipeline && !current.date_applied
+      ? new Date().toISOString().slice(0, 10)
+      : current.date_applied,
+  }
 }
 
 /** Maps a 0-10 score to the shared score ramp used by every bar and dial. */

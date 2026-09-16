@@ -1,0 +1,127 @@
+/* The applications-tab card. Layered on the `.card` shell in PlacementCard.css
+   (border, hover, the full-card hit target) so the click behaviour cannot drift
+   between the two boards; everything below is what makes this card different. */
+
+.appcard { gap: 11px; }
+
+/* The stage is this card's headline, where the board card puts its score dial. */
+.appcard-stage {
+  flex-shrink: 0;
+  align-self: flex-start;
+  max-width: 132px;
+  padding: 7px 13px;
+  border: 1px solid color-mix(in srgb, var(--stage-color) 45%, transparent);
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--stage-color) 16%, transparent);
+  color: var(--stage-color);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-align: center;
+}
+
+/* --- The ladder ------------------------------------------------------------
+   Six steps from Applied to Accepted. The point is to answer "how far along is
+   this" in one glance, without reading any of the labels. */
+
+.appcard-ladder {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 4px;
+  list-style: none;
+}
+.appcard-ladder li { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.appcard-ladder i {
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--surface-3);
+}
+.appcard-ladder span {
+  color: var(--text-faint);
+  font-size: 0.57rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.appcard-ladder .is-done i { background: color-mix(in srgb, var(--stage-color) 45%, transparent); }
+.appcard-ladder .is-done span { color: var(--text-dim); }
+.appcard-ladder .is-now i { height: 6px; margin-block: -1px; background: var(--stage-color); }
+.appcard-ladder .is-now span { color: var(--stage-color); font-weight: 750; }
+
+.appcard-ended {
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--stage-color) 30%, transparent);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--stage-color) 9%, transparent);
+  color: var(--text-dim);
+  font-size: 0.76rem;
+}
+.appcard-ended b { color: var(--stage-color); font-weight: 700; }
+
+/* A finished application is history: it keeps its facts but stops competing for
+   attention with the ones still live. */
+.appcard.is-ended { opacity: 0.78; }
+.appcard.is-ended:hover { opacity: 1; }
+
+/* --- Facts ---------------------------------------------------------------- */
+
+.appcard-facts .is-urgent dd,
+.appcard-facts .is-urgent em { color: #fb923c; }
+.appcard-wide { grid-column: 1 / -1; }
+
+.appcard-notes {
+  padding: 9px 12px;
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* The vacancy's own state, deliberately the quietest line on the card. */
+.appcard-vacancy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--text-faint);
+  font-size: 0.68rem;
+}
+
+/* --- Footer --------------------------------------------------------------- */
+
+/* Written as descendants of `.appcard` so these win over the `.card-foot` rules
+   in PlacementCard.css regardless of which stylesheet the bundler emits first. */
+.appcard .appcard-foot { align-items: center; }
+.appcard-stage-picker { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; }
+.appcard-stage-picker > span {
+  color: var(--text-faint);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.appcard-stage-picker select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  outline: none;
+  font-size: 0.83rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.appcard-stage-picker select:focus { border-color: var(--stage-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--stage-color) 18%, transparent); }
+.appcard .appcard-foot .btn { flex: 0 0 auto; min-height: 44px; }

@@ -1,10 +1,13 @@
 import type { ChangeEvent } from 'react'
 import type { Placement, PlacementPatch, AppStatus } from '../lib/supabase'
 import { APP_STATUSES } from '../lib/supabase'
-import { PRIORITY_COLORS, PRIORITY_LONG_LABELS, STATUS_COLORS, formatDate, orDash, relativeDays } from '../lib/utils'
+import {
+  PRIORITY_COLORS, PRIORITY_LONG_LABELS, STAGE_COLORS, STATUS_COLORS,
+  formatDate, orDash, relativeDays, stagePatch,
+} from '../lib/utils'
 import { explainScore, priorityOf, priorityScoreOf, isNewlyOpened, openedAgo } from '../lib/ranking'
-import { daysUntil, sectorGroup } from '../lib/filtering'
-import { Field, Pill, ScoreBar, ScoreDial, Section } from './ui'
+import { daysUntil, hasApplication, isSaved, sectorGroup } from '../lib/filtering'
+import { Field, Pill, SaveButton, ScoreBar, ScoreDial, Section } from './ui'
 import './PlacementDetail.css'
 
 interface Props {
@@ -25,14 +28,9 @@ export default function PlacementDetail({ placement: p, onPatch, onClose }: Prop
   const set = (field: keyof PlacementPatch) => (event: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     onPatch({ [field]: event.target.value || null } as PlacementPatch)
 
-  const handleStage = (event: ChangeEvent<HTMLSelectElement>) => {
-    const next = event.target.value as AppStatus
-    onPatch({
-      app_status: next,
-      // Stamp the application date the first time a role reaches "Applied".
-      date_applied: next === 'Applied' && !p.date_applied ? new Date().toISOString().slice(0, 10) : p.date_applied,
-    })
-  }
+  // `stagePatch` owns the date-stamping rule for every surface that sets a stage.
+  const handleStage = (event: ChangeEvent<HTMLSelectElement>) =>
+    onPatch(stagePatch(event.target.value as AppStatus, p))
 
   return (
     <div className="detail">
@@ -44,6 +42,7 @@ export default function PlacementDetail({ placement: p, onPatch, onClose }: Prop
           <div className="detail-tags">
             <Pill tone={PRIORITY_COLORS[priority]}>{PRIORITY_LONG_LABELS[priority]}</Pill>
             <Pill tone={STATUS_COLORS[p.application_status]}>{p.application_status}</Pill>
+            {p.app_status !== 'Not Applied' && <Pill tone={STAGE_COLORS[p.app_status]}>{p.app_status}</Pill>}
             {isNewlyOpened(p) && <Pill tone="#38bdf8">{openedAgo(p) ?? 'Just opened'}</Pill>}
             {p.start_year && <Pill>{p.start_year} intake</Pill>}
           </div>
@@ -59,6 +58,11 @@ export default function PlacementDetail({ placement: p, onPatch, onClose }: Prop
           <a className="btn btn-primary" href={p.application_link} target="_blank" rel="noopener noreferrer">
             {p.application_status === 'Open Now' ? 'Apply now' : 'Open listing'}
           </a>
+        )}
+        {/* Second in the row, at full size. Saving used to mean finding "Saved"
+            in the stage dropdown three sections down the panel. */}
+        {!hasApplication(p) && (
+          <SaveButton saved={isSaved(p)} onToggle={() => onPatch(stagePatch(isSaved(p) ? 'Not Applied' : 'Saved', p))} />
         )}
         {p.careers_page && p.careers_page !== p.application_link && (
           <a className="btn btn-ghost" href={p.careers_page} target="_blank" rel="noopener noreferrer">Careers page</a>

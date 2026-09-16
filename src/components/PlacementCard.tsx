@@ -1,8 +1,8 @@
 import type { Placement } from '../lib/supabase'
-import { PRIORITY_COLORS, PRIORITY_LABELS, STATUS_COLORS, orDash, relativeDays, formatDate, slug } from '../lib/utils'
+import { PRIORITY_COLORS, PRIORITY_LABELS, STAGE_COLORS, STATUS_COLORS, orDash, relativeDays, formatDate, slug } from '../lib/utils'
 import { priorityOf, priorityScoreOf, domainRelevance, isNewlyOpened, openedAgo } from '../lib/ranking'
-import { countryGroup, daysUntil, sectorGroup } from '../lib/filtering'
-import { Pill, ScoreDial } from './ui'
+import { countryGroup, daysUntil, hasApplication, isSaved, sectorGroup } from '../lib/filtering'
+import { Pill, SaveButton, ScoreDial } from './ui'
 import './PlacementCard.css'
 
 interface Props {
@@ -11,13 +11,20 @@ interface Props {
   isNew?: boolean
   isSelected?: boolean
   onOpen: () => void
+  onToggleSave: () => void
 }
 
 /**
  * The board card: one card per ROLE, never per company. A company running four
  * distinct placements gets four cards, each with its own rank, fit and deadline.
+ *
+ * Also the card for the saved tab: a saved role is still a role you are deciding
+ * about, so it wants the same facts — score, deadline, apply link. The
+ * applications tab gets its own card instead, because there the question has
+ * changed from "is this worth applying to" to "where is this one up to".
  */
-export default function PlacementCard({ placement: p, isNew, isSelected, onOpen }: Props) {
+export default function PlacementCard({ placement: p, isNew, isSelected, onOpen, onToggleSave }: Props) {
+  const saved = isSaved(p)
   const priority = priorityOf(p)
   const score = priorityScoreOf(p)
   const deadlineIn = daysUntil(p.exact_deadline)
@@ -38,6 +45,7 @@ export default function PlacementCard({ placement: p, isNew, isSelected, onOpen 
         `card--${slug(priority)}`,
         isNew ? 'is-new' : '',
         justOpened ? 'just-opened' : '',
+        saved ? 'is-saved' : '',
         isSelected ? 'is-selected' : '',
       ].filter(Boolean).join(' ')}
       style={{ '--priority-color': PRIORITY_COLORS[priority] } as React.CSSProperties}
@@ -62,7 +70,7 @@ export default function PlacementCard({ placement: p, isNew, isSelected, onOpen 
         <Pill tone={PRIORITY_COLORS[priority]}>{PRIORITY_LABELS[priority]}</Pill>
         <Pill tone={STATUS_COLORS[p.application_status]}>{p.application_status}</Pill>
         <Pill>{p.opportunity_type}</Pill>
-        {p.app_status !== 'Not Applied' && <Pill tone="#38bdf8">{p.app_status}</Pill>}
+        {hasApplication(p) && <Pill tone={STAGE_COLORS[p.app_status]}>{p.app_status}</Pill>}
       </div>
 
       <dl className="card-facts">
@@ -96,7 +104,10 @@ export default function PlacementCard({ placement: p, isNew, isSelected, onOpen 
               {p.application_status === 'Open Now' ? 'Apply' : 'View listing'}
             </a>
           : <span className="btn btn-disabled">No link</span>}
-        <button className="btn btn-ghost" onClick={onOpen}>Details</button>
+        {/* Offered only while no application exists: past that, the stage is the
+            pipeline's and a save toggle would overwrite it. */}
+        {!hasApplication(p) && <SaveButton saved={saved} onToggle={onToggleSave} />}
+        <button className="btn btn-ghost card-details" onClick={onOpen}>Details</button>
       </footer>
     </article>
   )

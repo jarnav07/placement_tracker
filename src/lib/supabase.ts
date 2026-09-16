@@ -26,6 +26,18 @@ export const APP_STATUSES = [
 ] as const
 export type AppStatus = (typeof APP_STATUSES)[number]
 
+/**
+ * The stages that mean an application actually exists.
+ *
+ * `Saved` is deliberately absent: it is a shortlist marker meaning "I want to
+ * apply to this", not an application, and it has its own view. `Not Applied` is
+ * the default every untouched row carries.
+ */
+export const APPLICATION_STAGES = APP_STATUSES
+  .filter((stage): stage is Exclude<AppStatus, 'Not Applied' | 'Saved'> =>
+    stage !== 'Not Applied' && stage !== 'Saved')
+export type ApplicationStage = (typeof APPLICATION_STAGES)[number]
+
 export const OPPORTUNITY_TYPES = [
   'Industrial Placement', 'Spring Week / Insight', 'Internship / Co-op', 'Other Student Programme',
 ] as const

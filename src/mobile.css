@@ -170,8 +170,9 @@
 
   /* --- Bottom tab bar ---
      A floating pill inset from the edges, with Not Interested lifted out into its
-     own round button above it. Two primary destinations stay full-width and
-     thumb-reachable; the third is present without stealing a third of the bar. */
+     own round button above it. The three destinations the user moves between —
+     Explore, Saved, Applications — stay thumb-reachable; Not Interested is
+     present without stealing a quarter of the bar. */
   .m-tabs {
     position: fixed;
     left: 10px;
@@ -179,7 +180,7 @@
     bottom: calc(8px + env(safe-area-inset-bottom));
     z-index: 80;
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     height: 64px;
     padding: 5px;
     border: 1px solid var(--border-strong);
@@ -218,7 +219,12 @@
     line-height: 15px;
     text-align: center;
   }
-  .m-tabs button em { top: 5px; right: 22%; }
+  /* Tucked above the glyph. Three columns are narrower than two, so the badge
+     rides closer to the centre than it did or it would clip the neighbour. */
+  .m-tabs button em { top: 5px; right: 14%; }
+  /* The saved count carries the saved colour, so the two badges in the bar are
+     telling you about two different things rather than reading as one number. */
+  .m-tabs button em.is-saved { background: var(--saved); }
 
   .m-hidden-fab {
     position: fixed;
