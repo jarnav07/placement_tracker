@@ -234,6 +234,18 @@ Rules:
 - **One card per role, never per company.** A company running four placements gets four
   cards. A previous version de-duplicated by company and hid 270 of 378 roles; `npm run check`
   now fails if that logic comes back.
+- **The user's own record outlives the vacancy.** The Saved and My applications views are
+  scoped by `app_status` alone. `archived`, `not_interested` and a `Closed`
+  `application_status` are all statements about the *vacancy*, and none of them may remove a
+  saved or applied role from its tab — losing the record that the user applied is worse than
+  showing a card for a role that has closed. Availability and priority are not offered as
+  filters in the applications view and are cleared on the way in, because a closed role fails
+  both and the filter used to survive a view change and empty the tab.
+- **`Saved` is not an application.** It is a shortlist marker with its own view. Anything
+  that means "has applied" tests `hasApplication()`, never `app_status !== 'Not Applied'`.
+- **One rule for `date_applied`.** Four surfaces now set a stage; all of them go through
+  `stagePatch()` in `src/lib/utils.ts`, which stamps the date on entering the pipeline and
+  never clears it.
 - Do not duplicate filtering or ranking logic inside a component.
 - Do not add an editor for a researched column — the next audit would overwrite it.
 - Do not replace a mobile interaction with a desktop one. Preserve the swipe gestures, the

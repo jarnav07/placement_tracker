@@ -1,6 +1,52 @@
 import type { ReactNode } from 'react'
 import { scoreColor, isBlank } from '../lib/utils'
 
+/** The bookmark glyph, drawn rather than typed so it fills when a role is saved. */
+export function BookmarkIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+      <path
+        d="M6 3.75h12a1.25 1.25 0 0 1 1.25 1.25v15.1a.75.75 0 0 1-1.16.63L12 16.6l-6.09 4.13a.75.75 0 0 1-1.16-.63V5A1.25 1.25 0 0 1 6 3.75Z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+/**
+ * Save / unsave a role, as a first-class control rather than a hidden menu item.
+ *
+ * Saving writes `app_status`, so it is only offered while the role is at "Not
+ * Applied" or "Saved" — once an application exists, the stage belongs to the
+ * pipeline and a save toggle could throw it away. The target is deliberately
+ * large: this is the button the user presses most while scanning the board.
+ */
+export function SaveButton({ saved, onToggle, compact }: {
+  saved: boolean
+  onToggle: () => void
+  /** Icon only, for the mobile row where there is no space for a word. */
+  compact?: boolean
+}) {
+  const label = saved ? 'Saved' : 'Save'
+  return (
+    <button
+      type="button"
+      className={`save-btn${compact ? ' save-btn--compact' : ''}${saved ? ' is-saved' : ''}`}
+      aria-pressed={saved}
+      title={saved ? 'Remove from saved roles' : 'Save this role to your saved tab'}
+      aria-label={saved ? `${label} — tap to remove from saved roles` : 'Save this role'}
+      onClick={event => { event.stopPropagation(); onToggle() }}
+      onPointerDown={event => event.stopPropagation()}
+    >
+      <BookmarkIcon filled={saved} />
+      {!compact && <span>{label}</span>}
+    </button>
+  )
+}
+
 /** Small labelled pill. `tone` drives the accent colour via a CSS variable. */
 export function Pill({ children, tone, title }: { children: ReactNode; tone?: string; title?: string }) {
   return (

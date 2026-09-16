@@ -166,6 +166,70 @@ check('sorting does not de-duplicate by company',
   !/companyKey|seen\.has\(key\)/.test(filtering),
   'a previous version showed one card per company, hiding 270 of 378 roles')
 
+// --- 4b. The user's own record outlives the vacancy -------------------------
+//
+// An application is the only record that the user did something. The audit
+// closing the role, the crawler archiving the row and a later "not interested"
+// are all statements about the VACANCY, and none of them may take the
+// application out of the applications tab. Roles the user had applied to
+// disappeared the moment the employer closed the listing, which is the single
+// worst thing this tab can do.
+
+const viewBlock = filtering.slice(
+  filtering.indexOf('export function placementsForView'),
+  filtering.indexOf('const SEARCHABLE'),
+)
+check('the applications view is scoped by the stage alone',
+  /case 'applications': return placements\.filter\(hasApplication\)/.test(viewBlock),
+  'archived / not_interested / Closed must not be able to hide an application')
+check('the saved view is scoped by the stage alone',
+  /case 'saved': return placements\.filter\(isSaved\)/.test(viewBlock))
+check('"Saved" is not counted as an application',
+  filtering.includes("p.app_status !== 'Not Applied' && p.app_status !== 'Saved'")
+  && read('src/lib/supabase.ts').includes("stage !== 'Not Applied' && stage !== 'Saved'"),
+  'a saved role belongs in the saved tab, not in the pipeline')
+check('the vacancy filters are cleared on the way into the applications view',
+  read('src/App.tsx').includes('...VACANCY_FILTERS')
+  && filtering.includes("export const VACANCY_FILTERS"),
+  'carrying status: "Open Now" into the tab hid every application that had closed')
+check('the applications view offers no availability or priority control',
+  read('src/components/Filters.tsx').includes("const showVacancyFilters = view !== 'applications'"),
+  'a reachable "Open Now" filter is a way to empty the tab by accident')
+check('the applications tab renders its own card, not the board card',
+  read('src/App.tsx').includes("view === 'applications'\n                    ? (\n                      <ApplicationCard"),
+  'the applications tab shows the stage and the record, not the ranking')
+
+const appCard = read('src/components/ApplicationCard.tsx')
+for (const ranking of ['ScoreDial', 'priorityOf', 'cv_fit', 'domainRelevance']) {
+  check(`the applications card does not repeat the board's '${ranking}'`,
+    !new RegExp(`\\b${ranking}\\b`).test(appCard),
+    'the applications tab answers "where is this up to", not "is this worth applying to"')
+}
+for (const own of ['app_status', 'date_applied', 'interview_date', 'cv_version', 'referral_contact']) {
+  check(`the applications card shows the user-owned column '${own}'`,
+    new RegExp(`\\b${own}\\b`).test(appCard))
+}
+
+check('the stage date-stamping rule has exactly one implementation',
+  (read('src/lib/utils.ts').match(/export function stagePatch/g) ?? []).length === 1
+  && ['src/components/PlacementDetail.tsx', 'src/components/ApplicationCard.tsx',
+      'src/components/MobilePlacementCard.tsx', 'src/App.tsx']
+    .every(file => read(file).includes('stagePatch(')),
+  'every surface that sets a stage must stamp date_applied the same way')
+check('leaving the pipeline never clears the date the user applied',
+  !/date_applied: applied \? null/.test(read('src/components/MobilePlacementCard.tsx')),
+  'an un-apply swipe used to delete a date the user had typed in')
+
+check('saving is offered only while no application exists',
+  ['src/components/PlacementCard.tsx', 'src/components/PlacementDetail.tsx']
+    .every(file => read(file).includes('!hasApplication(p) &&'))
+  && read('src/components/MobilePlacementCard.tsx').includes('!isApplicationRow && !applied &&'),
+  'a save toggle on an applied role would overwrite its pipeline stage')
+check('the save control is a real button, not a line in the stage dropdown',
+  read('src/components/ui.tsx').includes('export function SaveButton')
+  && /\.save-btn\s*\{[^}]*min-height:\s*44px/.test(read('src/index.css')),
+  'it is the control pressed most often while scanning the board')
+
 // --- 5. Role-quality gate ---------------------------------------------------
 
 const SHOULD_REJECT = [

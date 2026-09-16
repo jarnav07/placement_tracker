@@ -1,4 +1,4 @@
-import { APPLICATION_STATUSES, OPPORTUNITY_TYPES, APP_STATUSES, PRIORITIES } from '../lib/supabase'
+import { APPLICATION_STATUSES, OPPORTUNITY_TYPES, APPLICATION_STAGES, PRIORITIES } from '../lib/supabase'
 import { COUNTRY_GROUPS, SECTOR_GROUPS, SORT_OPTIONS, type Filters, type SortOption, type View } from '../lib/filtering'
 import { PRIORITY_LABELS } from '../lib/utils'
 
@@ -17,23 +17,33 @@ interface Props {
  * filter sheet, so the two can never drift apart.
  */
 export default function Filters({ filters, sort, view, onChange, onSort, onReset, showReset }: Props) {
+  // Priority and availability describe the VACANCY. In the applications view
+  // they are not just unhelpful, they are destructive: every role that closed
+  // after the user applied falls to "Closed"/"Low", so leaving either control
+  // reachable there is a way to empty the tab of real applications by accident.
+  const showVacancyFilters = view !== 'applications'
+
   return (
     <>
-      <label className="field-select">
-        <span>Priority</span>
-        <select value={filters.priority} onChange={e => onChange({ priority: e.target.value as Filters['priority'] })}>
-          <option value="all">All priorities</option>
-          {PRIORITIES.map(key => <option key={key} value={key}>{PRIORITY_LABELS[key]}</option>)}
-        </select>
-      </label>
+      {showVacancyFilters && (
+        <label className="field-select">
+          <span>Priority</span>
+          <select value={filters.priority} onChange={e => onChange({ priority: e.target.value as Filters['priority'] })}>
+            <option value="all">All priorities</option>
+            {PRIORITIES.map(key => <option key={key} value={key}>{PRIORITY_LABELS[key]}</option>)}
+          </select>
+        </label>
+      )}
 
-      <label className="field-select">
-        <span>Availability</span>
-        <select value={filters.status} onChange={e => onChange({ status: e.target.value as Filters['status'] })}>
-          <option value="all">All statuses</option>
-          {APPLICATION_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
-        </select>
-      </label>
+      {showVacancyFilters && (
+        <label className="field-select">
+          <span>Availability</span>
+          <select value={filters.status} onChange={e => onChange({ status: e.target.value as Filters['status'] })}>
+            <option value="all">All statuses</option>
+            {APPLICATION_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
+          </select>
+        </label>
+      )}
 
       <label className="field-select">
         <span>Type</span>
@@ -64,7 +74,7 @@ export default function Filters({ filters, sort, view, onChange, onSort, onReset
           <span>Stage</span>
           <select value={filters.stage} onChange={e => onChange({ stage: e.target.value as Filters['stage'] })}>
             <option value="all">All stages</option>
-            {APP_STATUSES.filter(stage => stage !== 'Not Applied').map(stage => <option key={stage} value={stage}>{stage}</option>)}
+            {APPLICATION_STAGES.map(stage => <option key={stage} value={stage}>{stage}</option>)}
           </select>
         </label>
       )}

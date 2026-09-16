@@ -22,7 +22,9 @@
 }
 .detail-close:hover { background: var(--surface-2); color: var(--text); }
 
-.detail-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Every control in this row is sized to be pressed, on a trackpad or a thumb. */
+.detail-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.detail-actions .btn { min-height: 44px; padding-inline: 18px; }
 
 .detail-section { display: flex; flex-direction: column; gap: 12px; }
 .detail-section h4 {

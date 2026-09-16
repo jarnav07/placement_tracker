@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx'
 import type { Placement } from './supabase'
 import { PRIORITY_LONG_LABELS } from './utils'
 import { priorityOf, priorityScoreOf, domainRelevance } from './ranking'
-import { SECTOR_GROUPS, sectorGroup, sortPlacements, type SectorGroup } from './filtering'
+import { SECTOR_GROUPS, placementsForView, sectorGroup, sortPlacements, type SectorGroup } from './filtering'
 
 const COLUMNS: { header: string; value: (p: Placement) => string | number }[] = [
   { header: 'Rank score /100', value: p => priorityScoreOf(p) },
@@ -97,11 +97,17 @@ function shortlistSheet(placements: Placement[]): XLSX.WorkSheet {
   return sheetFrom(headers, rows)
 }
 
+/**
+ * Both sheets scope themselves through `placementsForView`, so the export can
+ * never disagree with the tab it mirrors — including the rule that an
+ * application survives its vacancy closing or being archived.
+ */
 function pipelineSheet(placements: Placement[]): XLSX.WorkSheet {
-  const headers = ['Company', 'Role', 'Stage', 'Date applied', 'Interview date', 'CV version', 'Cover letter', 'Referral', 'Deadline', 'Notes']
-  const rows = sortPlacements(placements.filter(p => p.app_status !== 'Not Applied'), 'deadline').map(p => [
+  const headers = ['Company', 'Role', 'Stage', 'Date applied', 'Interview date', 'CV version', 'Cover letter', 'Referral', 'Vacancy status', 'Deadline', 'Notes']
+  const rows = sortPlacements(placementsForView(placements, 'applications'), 'stage').map(p => [
     p.company, p.specific_role, p.app_status, p.date_applied ?? '', p.interview_date ?? '',
-    p.cv_version ?? '', p.cover_letter_required ?? '', p.referral_contact ?? '', p.exact_deadline ?? '', p.notes ?? '',
+    p.cv_version ?? '', p.cover_letter_required ?? '', p.referral_contact ?? '',
+    p.application_status, p.exact_deadline ?? '', p.notes ?? '',
   ])
   return sheetFrom(headers, rows)
 }
@@ -131,7 +137,8 @@ export function downloadExcel(placements: Placement[]) {
   XLSX.utils.book_append_sheet(workbook, fullSheet(tracked), 'All roles')
   XLSX.utils.book_append_sheet(workbook, fullSheet(active.filter(p => p.application_status === 'Open Now')), 'Open now')
   XLSX.utils.book_append_sheet(workbook, fullSheet(active.filter(p => p.application_status === 'Opening Soon')), 'Opening soon')
-  XLSX.utils.book_append_sheet(workbook, pipelineSheet(tracked), 'My pipeline')
+  XLSX.utils.book_append_sheet(workbook, fullSheet(placementsForView(placements, 'saved')), 'Saved')
+  XLSX.utils.book_append_sheet(workbook, pipelineSheet(placements), 'My pipeline')
   for (const sector of SECTOR_GROUPS) {
     XLSX.utils.book_append_sheet(workbook, sectorSheet(active, sector), SHEET_NAMES[sector])
   }

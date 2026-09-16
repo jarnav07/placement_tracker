@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { supabase, PRIORITIES, APP_STATUSES } from './lib/supabase'
+import { supabase, PRIORITIES, APPLICATION_STAGES } from './lib/supabase'
 import type { Placement, PlacementPatch, OverallPriority } from './lib/supabase'
-import { PRIORITY_COLORS, PRIORITY_LABELS } from './lib/utils'
+import { PRIORITY_COLORS, PRIORITY_LABELS, stagePatch } from './lib/utils'
 import {
-  EMPTY_FILTERS, countBy, filterPlacements, hasActiveFilters, placementsForView, sortPlacements,
+  DEFAULT_SORT, EMPTY_FILTERS, VACANCY_FILTERS, countBy, filterPlacements, hasActiveFilters,
+  isSaved, placementsForView, sortPlacements,
   type Filters as FilterState, type SortOption, type View,
 } from './lib/filtering'
 import { priorityOf, isNewlyOpened } from './lib/ranking'
 import { downloadExcel } from './lib/excel'
 import PlacementCard from './components/PlacementCard'
+import ApplicationCard from './components/ApplicationCard'
 import PlacementDetail from './components/PlacementDetail'
 import MobilePlacementCard from './components/MobilePlacementCard'
 import Filters from './components/Filters'
@@ -16,13 +18,17 @@ import './App.css'
 import './mobile.css'
 
 /** The pipeline reads left to right, so it is rendered in stage order, not count order. */
-const PIPELINE_STAGES = APP_STATUSES.filter(stage => stage !== 'Not Applied')
+const PIPELINE_STAGES = APPLICATION_STAGES
 
 const VIEWS: { key: View; label: string; short: string; icon: string }[] = [
   { key: 'opportunities', label: 'Opportunities', short: 'Explore', icon: '\u2302' },
+  { key: 'saved', label: 'Saved roles', short: 'Saved', icon: '\u2691' },
   { key: 'applications', label: 'My applications', short: 'Applications', icon: '\u2713' },
   { key: 'not-interested', label: 'Not interested', short: 'Not interested', icon: '\u2212' },
 ]
+
+/** The three destinations in the mobile tab bar. Not Interested lives in its own FAB. */
+const MOBILE_TABS = VIEWS.filter(item => item.key !== 'not-interested')
 
 export default function App() {
   const [placements, setPlacements] = useState<Placement[]>([])
@@ -112,13 +118,16 @@ export default function App() {
     soon: board.filter(p => p.application_status === 'Opening Soon').length,
     // Opened within the last few days — the roles worth looking at first.
     justOpened: board.filter(isNewlyOpened).length,
-    applied: placements.filter(p => !p.archived && p.app_status !== 'Not Applied').length,
-    hidden: placements.filter(p => p.not_interested && !p.archived).length,
+    // Counted through the view functions, so the tab badge can never disagree
+    // with what the tab actually contains.
+    saved: placementsForView(placements, 'saved').length,
+    applied: placementsForView(placements, 'applications').length,
+    hidden: placementsForView(placements, 'not-interested').length,
   }), [placements, board])
 
   const priorityCounts = useMemo(() => countBy<OverallPriority>(board, priorityOf), [board])
   const stageCounts = useMemo(
-    () => countBy(placements.filter(p => !p.archived), p => (p.app_status === 'Not Applied' ? null : p.app_status)),
+    () => countBy(placementsForView(placements, 'applications'), p => p.app_status),
     [placements],
   )
 
@@ -143,9 +152,25 @@ export default function App() {
     setSelectedId(null)
     setMobileFiltersOpen(false)
     setMobileSearchOpen(false)
-    // Stage only exists inside the applications view; carrying it out is confusing.
-    setFilters(prev => (next === 'applications' ? prev : { ...prev, stage: 'all' }))
+    setSort(DEFAULT_SORT[next])
+    setFilters(prev => next === 'applications'
+      // The vacancy filters are dropped on the way in. Arriving from the "Open
+      // now" stat used to carry `status: 'Open Now'` into this tab and hide
+      // every application whose role had since closed.
+      ? { ...prev, ...VACANCY_FILTERS }
+      // Stage only exists inside the applications view; carrying it out is confusing.
+      : { ...prev, stage: 'all' })
   }, [])
+
+  /**
+   * Saving writes the user's `app_status`. It is a toggle between "Not Applied"
+   * and "Saved" only — a role with a real application stage does not offer it,
+   * so this can never overwrite a pipeline stage.
+   */
+  const toggleSave = useCallback(
+    (p: Placement) => void patchPlacement(p.id, stagePatch(isSaved(p) ? 'Not Applied' : 'Saved', p)),
+    [patchPlacement],
+  )
 
   const jumpTo = useCallback((patch: Partial<FilterState>, nextSort: SortOption = 'priority') => {
     setView('opportunities')
@@ -163,13 +188,17 @@ export default function App() {
 
   const emptyMessage = {
     opportunities: 'No opportunities match these filters.',
+    saved: 'Nothing saved yet. Press Save on any role to shortlist it here.',
     applications: 'You have not tracked any applications yet.',
     'not-interested': 'Nothing has been marked as not interested.',
   }[view]
 
-  const searchPlaceholder = view === 'applications'
-    ? 'Search your applications, notes and contacts…'
-    : 'Search companies, roles, skills, locations…'
+  const searchPlaceholder = {
+    opportunities: 'Search companies, roles, skills, locations…',
+    saved: 'Search your saved roles…',
+    applications: 'Search your applications, notes and contacts…',
+    'not-interested': 'Search companies, roles, skills, locations…',
+  }[view]
 
   return (
     <>
@@ -206,6 +235,9 @@ export default function App() {
             )}
             <button className="stat stat--soon" onClick={() => jumpTo({ status: 'Opening Soon' })}>
               <b>{stats.soon}</b><span>Opening soon</span>
+            </button>
+            <button className="stat stat--saved" onClick={() => changeView('saved')}>
+              <b>{stats.saved}</b><span>Saved</span>
             </button>
             <button className="stat stat--applied" onClick={() => changeView('applications')}>
               <b>{stats.applied}</b><span>Applications</span>
@@ -297,15 +329,28 @@ export default function App() {
               )
               : (
                 <div className="card-grid">
-                  {visible.map(p => (
-                    <PlacementCard
-                      key={p.id}
-                      placement={p}
-                      isNew={newIds.has(p.id)}
-                      isSelected={selectedId === p.id}
-                      onOpen={() => setSelectedId(p.id)}
-                    />
-                  ))}
+                  {/* The applications tab asks a different question, so it gets a
+                      different card: the user's stage and record, not the ranking. */}
+                  {visible.map(p => (view === 'applications'
+                    ? (
+                      <ApplicationCard
+                        key={p.id}
+                        placement={p}
+                        isSelected={selectedId === p.id}
+                        onOpen={() => setSelectedId(p.id)}
+                        onPatch={patch => void patchPlacement(p.id, patch)}
+                      />
+                    )
+                    : (
+                      <PlacementCard
+                        key={p.id}
+                        placement={p}
+                        isNew={newIds.has(p.id)}
+                        isSelected={selectedId === p.id}
+                        onOpen={() => setSelectedId(p.id)}
+                        onToggleSave={() => toggleSave(p)}
+                      />
+                    )))}
                 </div>
               )}
         </main>
@@ -345,7 +390,7 @@ export default function App() {
               {stats.justOpened > 0
                 ? <button className="is-new" onClick={showJustOpened}><b>{stats.justOpened}</b><span>Just opened</span></button>
                 : <button onClick={() => jumpTo({ status: 'Opening Soon' })}><b>{stats.soon}</b><span>Opening soon</span></button>}
-              <button onClick={() => changeView('applications')}><b>{stats.applied}</b><span>Applied</span></button>
+              <button onClick={() => changeView('saved')}><b>{stats.saved}</b><span>Saved</span></button>
             </div>
           )}
 
@@ -415,6 +460,7 @@ export default function App() {
                     <MobilePlacementCard
                       key={p.id}
                       placement={p}
+                      variant={view === 'applications' ? 'application' : 'opportunity'}
                       onOpen={() => setSelectedId(p.id)}
                       onPatch={patch => void patchPlacement(p.id, patch)}
                     />
@@ -424,10 +470,11 @@ export default function App() {
         </main>
 
         <nav className="m-tabs" aria-label="Main navigation">
-          {VIEWS.slice(0, 2).map(item => (
+          {MOBILE_TABS.map(item => (
             <button key={item.key} className={view === item.key ? 'is-active' : ''} onClick={() => changeView(item.key)}>
               <span aria-hidden="true">{item.icon}</span>
               <small>{item.short}</small>
+              {item.key === 'saved' && stats.saved > 0 && <em className="is-saved">{stats.saved}</em>}
               {item.key === 'applications' && stats.applied > 0 && <em>{stats.applied}</em>}
             </button>
           ))}

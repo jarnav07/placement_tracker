@@ -23,6 +23,10 @@
   --accent-soft: rgba(56, 189, 248, 0.14);
   --danger: #f87171;
   --danger-soft: rgba(248, 113, 113, 0.1);
+  /* Saved roles read as the user's own shortlist, distinct from the accent the
+     board already spends on "just opened". Mirrors STAGE_COLORS.Saved. */
+  --saved: #a78bfa;
+  --saved-soft: rgba(167, 139, 250, 0.14);
 
   /* Shape */
   --r-sm: 8px;
@@ -110,6 +114,44 @@ input, select, textarea { font: inherit; color: inherit; }
 
 .btn-disabled { opacity: 0.4; cursor: default; }
 .btn-disabled:hover { background: var(--surface-2); border-color: var(--border); }
+
+/* Save toggle. Shared by the board card, the drawer and the mobile row.
+   Sized well past the 44px touch guidance on purpose — it is the control the
+   user reaches for most while scanning, and it used to be a line in a dropdown. */
+.save-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 0.86rem;
+  font-weight: 650;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.12s;
+}
+.save-btn svg { flex-shrink: 0; }
+.save-btn:hover { background: var(--surface-3); border-color: var(--saved); color: var(--text); }
+.save-btn:active { transform: scale(0.97); }
+.save-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.save-btn.is-saved {
+  border-color: color-mix(in srgb, var(--saved) 55%, transparent);
+  background: var(--saved-soft);
+  color: var(--saved);
+}
+.save-btn.is-saved:hover { background: color-mix(in srgb, var(--saved) 22%, transparent); color: var(--saved); }
+
+/* Icon-only variant: a square target, still 44px, for the mobile list row. */
+.save-btn--compact {
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
+  border-radius: 13px;
+}
 
 .pill {
   --pill-accent: var(--text-faint);

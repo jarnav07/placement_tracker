@@ -222,12 +222,50 @@ before the trigger existed have no `opened_at` and correctly never show as new.
 | View | Shows |
 | --- | --- |
 | Opportunities | Everything not archived and not marked Not Interested |
-| My applications | Anything with a stage past *Not Applied* |
+| Saved roles | `app_status` is *Saved* — shortlisted, not yet applied to |
+| My applications | `app_status` is past *Saved* — an application actually exists |
 | Not interested | Roles the user rejected — hidden, never deleted |
 | Archived | Links the crawler mistook for vacancies — hidden, never deleted, restorable |
 
 **No view collapses roles by company.** One company can run several distinct placements and
 each carries its own fit, deadline and rank.
+
+### The user's own record outlives the vacancy
+
+*Saved* and *My applications* are scoped by `app_status` **alone**. Nothing the automation
+later decides about the vacancy can empty them:
+
+- a role that **closes** after the user applied stays in the tab, with `Closed` shown on the
+  card as a quiet fact rather than as a reason to disappear;
+- so does a row the crawler later **archives**, and one the user later marks **not interested**.
+
+Two things used to take applications out of that tab, and `npm run check` now fails if either
+comes back. The view itself filtered on `archived`; and the availability filter survived a
+view change, so arriving from the "Open now" stat carried `status: 'Open Now'` into the
+applications tab and hid every application whose role had since closed. The vacancy filters
+— availability and priority, both of which a closed role always fails — are now cleared on
+the way in and are not offered there at all.
+
+### Two boards, two questions
+
+The opportunities and saved tabs ask *is this worth applying to*, so their card is the
+ranking: score dial, priority band, fit numbers, sector, salary, deadline.
+
+The applications tab asks *where is this one up to*, so it shares none of that. Its card
+carries the stage as a headline and a six-step ladder (Applied → Accepted, with Rejected and
+Withdrawn ending it instead), the date applied and how long ago, the interview date, the CV
+version, the cover letter, the referral and a notes preview — plus a stage picker, so moving
+an application on does not need the detail panel. The vacancy's own status is one muted line
+at the bottom.
+
+### Saving
+
+Save is a full-size button on the board card, in the detail panel and on the mobile row
+(where it sits beside the score at the same 44px), not an option buried in the stage
+dropdown. It toggles `app_status` between *Not Applied* and *Saved*, and is offered only
+while no application exists, so it can never overwrite a pipeline stage. `stagePatch()` in
+`src/lib/utils.ts` is the single rule for what a stage change does to `date_applied`: stamped
+the first time a role reaches a real application stage, and never cleared afterwards.
 
 ---
 

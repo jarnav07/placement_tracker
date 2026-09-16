@@ -1,6 +1,6 @@
 import type { AppStatus, ApplicationStatus, OpportunityType, OverallPriority, Placement } from './supabase'
 import { priorityOf, priorityScoreOf, isNewlyOpened } from './ranking'
-import { parseDate, daysUntil } from './utils'
+import { parseDate, daysUntil, STAGE_RANK } from './utils'
 
 export const COUNTRY_GROUPS = ['UK', 'Europe', 'America', 'Asia', 'Oceania'] as const
 export type CountryGroup = (typeof COUNTRY_GROUPS)[number]
@@ -18,10 +18,25 @@ export const SORT_OPTIONS = {
   cv_fit: 'CV fit',
   company: 'Company A–Z',
   recent: 'Recently verified',
+  stage: 'Pipeline stage',
+  applied: 'Recently applied',
 } as const
 export type SortOption = keyof typeof SORT_OPTIONS
 
-export type View = 'opportunities' | 'applications' | 'not-interested'
+export type View = 'opportunities' | 'saved' | 'applications' | 'not-interested'
+
+/**
+ * Where each view starts. The applications view is a record of what the user
+ * has done, so it opens on the pipeline rather than on a match score that a
+ * closed vacancy drags to the bottom; the saved list is a to-do list, so it
+ * opens on what runs out first.
+ */
+export const DEFAULT_SORT: Record<View, SortOption> = {
+  opportunities: 'priority',
+  saved: 'deadline',
+  applications: 'stage',
+  'not-interested': 'priority',
+}
 
 export interface Filters {
   priority: OverallPriority | 'all'
@@ -40,6 +55,20 @@ export const EMPTY_FILTERS: Filters = {
 export function hasActiveFilters(f: Filters): boolean {
   return (Object.keys(EMPTY_FILTERS) as (keyof Filters)[]).some(key => f[key] !== EMPTY_FILTERS[key])
 }
+
+/**
+ * Filters that describe the VACANCY rather than the user's own record, and so
+ * have no business narrowing the applications tab.
+ *
+ * This is the bug that lost applications: clicking the "Open now" stat sets
+ * `status: 'Open Now'`, and the filter survived the move to the applications
+ * tab, where every role the user had applied to and that had since closed was
+ * silently filtered out. `changeView` clears these on the way in and
+ * `Filters` does not render their controls there, so an application can never
+ * be hidden by the vacancy's availability or by the priority band that a
+ * closed role always falls into.
+ */
+export const VACANCY_FILTERS: Pick<Filters, 'priority' | 'status'> = { priority: 'all', status: 'all' }
 
 // --- Normalisation -------------------------------------------------------
 // The migration normalises these columns in the database, but the browser
@@ -80,19 +109,38 @@ export { parseDate, daysUntil }
 
 // --- Views ---------------------------------------------------------------
 
+/** True once the user has actually applied. `Saved` is a shortlist marker, not an application. */
+export function hasApplication(p: Pick<Placement, 'app_status'>): boolean {
+  return p.app_status !== 'Not Applied' && p.app_status !== 'Saved'
+}
+
+/** Marked "I want to apply to this" and not yet applied to. */
+export function isSaved(p: Pick<Placement, 'app_status'>): boolean {
+  return p.app_status === 'Saved'
+}
+
 /**
  * `archived` rows are links the crawler mistook for a vacancy. They are hidden
- * from EVERY view — there is deliberately no archive tab — but the rows are kept,
- * so a mis-archived role can be restored with a single SQL update.
+ * from the browsing views — there is deliberately no archive tab — but the rows
+ * are kept, so a mis-archived role can be restored with a single SQL update.
  *
  * `not_interested` is the user's own rejection and keeps its own view.
+ *
+ * THE ONE THING THAT OVERRIDES BOTH: a role the user has saved or applied to is
+ * the user's own record, and nothing the automation later decides about the
+ * vacancy may take it out of its tab. A closed vacancy, a row the crawler
+ * re-classified as archived, even a later "not interested" — the application
+ * still happened and is the only trace of it in the app. Availability is shown
+ * on the card instead, so a closed role reads as closed rather than vanishing.
  */
 export function placementsForView(placements: Placement[], view: View): Placement[] {
-  const real = placements.filter(p => !p.archived)
   switch (view) {
-    case 'not-interested': return real.filter(p => p.not_interested)
-    case 'applications': return real.filter(p => p.app_status !== 'Not Applied')
-    default: return real.filter(p => !p.not_interested)
+    case 'applications': return placements.filter(hasApplication)
+    case 'saved': return placements.filter(isSaved)
+    case 'not-interested': return placements.filter(p => !p.archived && p.not_interested)
+    // Saved and applied roles stay on the board too — that is where the Save
+    // button lives, so removing them would leave no way to undo a save.
+    default: return placements.filter(p => !p.archived && !p.not_interested)
   }
 }
 
@@ -126,6 +174,20 @@ export function filterPlacements(placements: Placement[], filters: Filters): Pla
 // a company can run several distinct placements and each one carries its own
 // CV fit, priority band and deadline.
 
+/**
+ * Newest first, with rows that carry no date still last. Reversing `byDate`'s
+ * arguments would reverse its null handling too and float the undated rows to
+ * the top, which on "recently applied" is exactly the wrong end.
+ */
+function byDateDesc(a: string | null, b: string | null): number {
+  const left = parseDate(a)
+  const right = parseDate(b)
+  if (left === null && right === null) return 0
+  if (left === null) return 1
+  if (right === null) return -1
+  return right - left
+}
+
 /** Rows with no date sort last, in every date-based order. */
 function byDate(a: string | null, b: string | null): number {
   const left = parseDate(a)
@@ -156,6 +218,14 @@ export function sortPlacements(placements: Placement[], sort: SortOption): Place
 
   return [...placements].sort((a, b) => {
     switch (sort) {
+      case 'stage':
+        // Furthest through the pipeline first, terminal outcomes last, then the
+        // most recent application. A closed vacancy must not sink an offer.
+        return STAGE_RANK[a.app_status] - STAGE_RANK[b.app_status]
+          || byDateDesc(a.date_applied, b.date_applied)
+          || a.company.localeCompare(b.company)
+      case 'applied':
+        return byDateDesc(a.date_applied, b.date_applied) || tiebreak(a, b)
       case 'company':
         return a.company.localeCompare(b.company) || a.specific_role.localeCompare(b.specific_role)
       case 'newest':
