@@ -215,10 +215,22 @@ check('the stage date-stamping rule has exactly one implementation',
   && ['src/components/PlacementDetail.tsx', 'src/components/ApplicationCard.tsx',
       'src/components/MobilePlacementCard.tsx', 'src/App.tsx']
     .every(file => read(file).includes('stagePatch(')),
-  'every surface that sets a stage must stamp date_applied the same way')
+  'every surface that sets a stage must stamp date_applied and cv_version the same way')
 check('leaving the pipeline never clears the date the user applied',
   !/date_applied: applied \? null/.test(read('src/components/MobilePlacementCard.tsx')),
   'an un-apply swipe used to delete a date the user had typed in')
+
+const stagePatchBlock = read('src/lib/utils.ts').slice(
+  read('src/lib/utils.ts').indexOf('export function stagePatch'),
+  read('src/lib/utils.ts').indexOf('/** Maps a 0-10 score'),
+)
+check('applying without naming a CV version records the default one',
+  read('src/lib/utils.ts').includes("export const DEFAULT_CV_VERSION = 'Standard'")
+  && /cv_version: entersPipeline && !current\.cv_version\?\.trim\(\)/.test(stagePatchBlock),
+  'a blank CV version on an applied role reads as "unknown", not as "the untailored CV"')
+check('the CV-version default is a first stamp, never an overwrite',
+  stagePatchBlock.includes(': current.cv_version'),
+  'a version the user typed must survive every later stage change')
 
 check('saving is offered only while no application exists',
   ['src/components/PlacementCard.tsx', 'src/components/PlacementDetail.tsx']

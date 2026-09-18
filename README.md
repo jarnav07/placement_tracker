@@ -264,8 +264,13 @@ Save is a full-size button on the board card, in the detail panel and on the mob
 (where it sits beside the score at the same 44px), not an option buried in the stage
 dropdown. It toggles `app_status` between *Not Applied* and *Saved*, and is offered only
 while no application exists, so it can never overwrite a pipeline stage. `stagePatch()` in
-`src/lib/utils.ts` is the single rule for what a stage change does to `date_applied`: stamped
-the first time a role reaches a real application stage, and never cleared afterwards.
+`src/lib/utils.ts` is the single rule for what a stage change does to the two fields that
+follow from it. `date_applied` is stamped the first time a role reaches a real application
+stage, and never cleared afterwards. `cv_version` is recorded as *Standard* when a stage change
+puts the role in the pipeline with the field still empty — most applications go out on the
+untailored CV and nobody stops to type that, so a blank there used to read as "unknown"
+rather than as what actually happened. Both only ever fill a gap: a date or a CV version the
+user typed is never overwritten.
 
 ---
 

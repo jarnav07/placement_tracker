@@ -2,7 +2,7 @@ import type { ChangeEvent } from 'react'
 import type { Placement, PlacementPatch, AppStatus } from '../lib/supabase'
 import { APP_STATUSES } from '../lib/supabase'
 import {
-  PRIORITY_COLORS, PRIORITY_LONG_LABELS, STAGE_COLORS, STATUS_COLORS,
+  DEFAULT_CV_VERSION, PRIORITY_COLORS, PRIORITY_LONG_LABELS, STAGE_COLORS, STATUS_COLORS,
   formatDate, orDash, relativeDays, stagePatch,
 } from '../lib/utils'
 import { explainScore, priorityOf, priorityScoreOf, isNewlyOpened, openedAgo } from '../lib/ranking'
@@ -96,7 +96,9 @@ export default function PlacementDetail({ placement: p, onPatch, onClose }: Prop
           </label>
           <label>
             CV version
-            <input type="text" placeholder="e.g. Aerospace v4" value={p.cv_version ?? ''} onChange={set('cv_version')} />
+            {/* The placeholder is the value applying will record if this is left
+                empty, so the default is visible before it is stamped. */}
+            <input type="text" placeholder={`${DEFAULT_CV_VERSION} — or e.g. Aerospace v4`} value={p.cv_version ?? ''} onChange={set('cv_version')} />
           </label>
           <label>
             Referral / contact

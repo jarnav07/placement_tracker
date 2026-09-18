@@ -88,6 +88,9 @@ export function stageStep(stage: AppStatus): number | null {
   return index === -1 ? null : index + 1
 }
 
+/** What `cv_version` records when an application is made without naming one. */
+export const DEFAULT_CV_VERSION = 'Standard'
+
 /**
  * The patch that moves a role to `next`.
  *
@@ -98,14 +101,23 @@ export function stageStep(stage: AppStatus): number | null {
  * exists, and is never cleared afterwards. Un-applying used to wipe it, which
  * threw away a date the user had typed in; a stage is reversible, the record of
  * when you applied should not be collateral.
+ *
+ * `cv_version` follows the same shape, for the same reason. Most applications go
+ * out on the untailored CV and nobody stops to type that, so a stage change that
+ * finds the field empty records "Standard" rather than leaving a blank that reads
+ * as "unknown". A version the user has typed is never overwritten — like the date,
+ * this only ever fills a gap.
  */
-export function stagePatch(next: AppStatus, current: Pick<Placement, 'date_applied'>): PlacementPatch {
+export function stagePatch(next: AppStatus, current: Pick<Placement, 'date_applied' | 'cv_version'>): PlacementPatch {
   const entersPipeline = next !== 'Not Applied' && next !== 'Saved'
   return {
     app_status: next,
     date_applied: entersPipeline && !current.date_applied
       ? new Date().toISOString().slice(0, 10)
       : current.date_applied,
+    cv_version: entersPipeline && !current.cv_version?.trim()
+      ? DEFAULT_CV_VERSION
+      : current.cv_version,
   }
 }
 
