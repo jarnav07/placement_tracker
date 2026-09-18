@@ -243,9 +243,10 @@ Rules:
   both and the filter used to survive a view change and empty the tab.
 - **`Saved` is not an application.** It is a shortlist marker with its own view. Anything
   that means "has applied" tests `hasApplication()`, never `app_status !== 'Not Applied'`.
-- **One rule for `date_applied`.** Four surfaces now set a stage; all of them go through
-  `stagePatch()` in `src/lib/utils.ts`, which stamps the date on entering the pipeline and
-  never clears it.
+- **One rule for `date_applied` and `cv_version`.** Four surfaces now set a stage; all of
+  them go through `stagePatch()` in `src/lib/utils.ts`, which stamps the date on entering the
+  pipeline and never clears it, and records the CV version as `Standard` when the user
+  entered none. Both only ever fill a gap — a value the user typed is never overwritten.
 - Do not duplicate filtering or ranking logic inside a component.
 - Do not add an editor for a researched column — the next audit would overwrite it.
 - Do not replace a mobile interaction with a desktop one. Preserve the swipe gestures, the
