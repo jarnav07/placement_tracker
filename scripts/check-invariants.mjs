@@ -195,6 +195,16 @@ check('the vacancy filters are cleared on the way into the applications view',
 check('the applications view offers no availability or priority control',
   read('src/components/Filters.tsx').includes("const showVacancyFilters = view !== 'applications'"),
   'a reachable "Open Now" filter is a way to empty the tab by accident')
+check('the Explore board leaves out closed vacancies',
+  /default: return placements\.filter\(p => !p\.archived && !p\.not_interested && !isClosed\(p\)\)/.test(viewBlock)
+  && filtering.includes("return p.application_status === 'Closed'"),
+  'Explore answers "what can I apply to"; a closed role is noise there')
+check('closing a vacancy does not take it out of Saved or My applications',
+  !/case 'saved':[^\n]*isClosed/.test(viewBlock) && !/case 'applications':[^\n]*isClosed/.test(viewBlock),
+  'the user\'s own record outlives the vacancy')
+check('the Explore availability filter does not offer the dead "Closed" option',
+  read('src/components/Filters.tsx').includes("APPLICATION_STATUSES.filter(status => status !== 'Closed')"),
+  'Explore holds no closed roles, so filtering to Closed there always returns nothing')
 check('the applications tab renders its own card, not the board card',
   read('src/App.tsx').includes("view === 'applications'\n                    ? (\n                      <ApplicationCard"),
   'the applications tab shows the stage and the record, not the ranking')

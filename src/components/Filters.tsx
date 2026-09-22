@@ -23,6 +23,13 @@ export default function Filters({ filters, sort, view, onChange, onSort, onReset
   // reachable there is a way to empty the tab of real applications by accident.
   const showVacancyFilters = view !== 'applications'
 
+  // Explore only holds roles that can still be applied to, so "Closed" there
+  // is a filter that always returns nothing. Saved and Not interested keep it:
+  // a closed role stays in those tabs and filtering to it is useful.
+  const statuses = view === 'opportunities'
+    ? APPLICATION_STATUSES.filter(status => status !== 'Closed')
+    : APPLICATION_STATUSES
+
   return (
     <>
       {showVacancyFilters && (
@@ -40,7 +47,7 @@ export default function Filters({ filters, sort, view, onChange, onSort, onReset
           <span>Availability</span>
           <select value={filters.status} onChange={e => onChange({ status: e.target.value as Filters['status'] })}>
             <option value="all">All statuses</option>
-            {APPLICATION_STATUSES.map(status => <option key={status} value={status}>{status}</option>)}
+            {statuses.map(status => <option key={status} value={status}>{status}</option>)}
           </select>
         </label>
       )}

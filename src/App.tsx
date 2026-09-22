@@ -159,7 +159,9 @@ export default function App() {
       // every application whose role had since closed.
       ? { ...prev, ...VACANCY_FILTERS }
       // Stage only exists inside the applications view; carrying it out is confusing.
-      : { ...prev, stage: 'all' })
+      // "Closed" is a real filter in the Saved and Not interested tabs but matches
+      // nothing on Explore, so it is dropped rather than carried in as a dead filter.
+      : { ...prev, stage: 'all', status: next === 'opportunities' && prev.status === 'Closed' ? 'all' : prev.status })
   }, [])
 
   /**

@@ -234,10 +234,14 @@ Rules:
 - **One card per role, never per company.** A company running four placements gets four
   cards. A previous version de-duplicated by company and hid 270 of 378 roles; `npm run check`
   now fails if that logic comes back.
+- **Explore shows only what can still be applied to.** A `Closed` `application_status` keeps
+  the role off the Opportunities board, next to `archived` and `not_interested`. That is the
+  only view it removes the role from, and it never deletes or rewrites the row.
 - **The user's own record outlives the vacancy.** The Saved and My applications views are
   scoped by `app_status` alone. `archived`, `not_interested` and a `Closed`
   `application_status` are all statements about the *vacancy*, and none of them may remove a
-  saved or applied role from its tab — losing the record that the user applied is worse than
+  saved or applied role from its tab — a closed role leaves the Opportunities board and stays
+  in Saved and My applications — losing the record that the user applied is worse than
   showing a card for a role that has closed. Availability and priority are not offered as
   filters in the applications view and are cleared on the way in, because a closed role fails
   both and the filter used to survive a view change and empty the tab.

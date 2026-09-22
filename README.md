@@ -221,7 +221,7 @@ before the trigger existed have no `opened_at` and correctly never show as new.
 
 | View | Shows |
 | --- | --- |
-| Opportunities | Everything not archived and not marked Not Interested |
+| Opportunities | Everything still applicable to — not archived, not marked Not Interested, not `Closed` |
 | Saved roles | `app_status` is *Saved* — shortlisted, not yet applied to |
 | My applications | `app_status` is past *Saved* — an application actually exists |
 | Not interested | Roles the user rejected — hidden, never deleted |
@@ -230,13 +230,23 @@ before the trigger existed have no `opened_at` and correctly never show as new.
 **No view collapses roles by company.** One company can run several distinct placements and
 each carries its own fit, deadline and rank.
 
+### Explore only shows what can still be applied to
+
+A `Closed` vacancy is dropped from the Opportunities board, along with the archived rows and
+the ones marked Not Interested. It is a statement about the vacancy, so it removes the role
+from the tab that asks *what can I apply to* and from nowhere else: the row is never deleted,
+it is still exported, it still appears in *Saved* and *My applications*, and it comes straight
+back onto the board if a later audit re-opens it. The availability filter on that tab no
+longer offers `Closed` either, since nothing there can match it.
+
 ### The user's own record outlives the vacancy
 
 *Saved* and *My applications* are scoped by `app_status` **alone**. Nothing the automation
 later decides about the vacancy can empty them:
 
 - a role that **closes** after the user applied stays in the tab, with `Closed` shown on the
-  card as a quiet fact rather than as a reason to disappear;
+  card as a quiet fact rather than as a reason to disappear — it leaves the Opportunities
+  board only;
 - so does a row the crawler later **archives**, and one the user later marks **not interested**.
 
 Two things used to take applications out of that tab, and `npm run check` now fails if either
