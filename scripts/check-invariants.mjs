@@ -220,6 +220,47 @@ for (const own of ['app_status', 'date_applied', 'interview_date', 'cv_version',
     new RegExp(`\\b${own}\\b`).test(appCard))
 }
 
+// --- 4c. The application stage ladder ---------------------------------------
+//
+// `app_status` is user-owned and CHECK-constrained, so the browser's vocabulary
+// and the database's have to be the same list. If they drift, the browser
+// offers a stage that Postgres rejects and the user's stage change fails on
+// save — or a stored stage renders with no colour and matches no filter, which
+// is how 86 rows once ended up with a blank priority badge.
+
+const utils = read('src/lib/utils.ts')
+const supabaseTs = read('src/lib/supabase.ts')
+const stageMigration = read('supabase/migrations/20260922120000_application_stage_ladder.sql')
+
+const listFrom = text => [...text.matchAll(/'([^']+)'/g)].map(match => match[1])
+const appStatuses = listFrom(
+  supabaseTs.slice(supabaseTs.indexOf('export const APP_STATUSES'), supabaseTs.indexOf('export type AppStatus')))
+const constraintStatuses = listFrom(
+  stageMigration.slice(stageMigration.lastIndexOf('CHECK (app_status IN')))
+
+check('the stage vocabulary is identical in TypeScript and in the CHECK constraint',
+  appStatuses.length === 10 && appStatuses.join('|') === constraintStatuses.join('|'),
+  `browser has [${appStatuses}], Postgres has [${constraintStatuses}]`)
+
+const ladder = listFrom(utils.slice(utils.indexOf('export const STAGE_LADDER'), utils.indexOf('/** Every stage that is off the ladder')))
+check('the ladder is the five stages an application climbs, ending at the offer',
+  ladder.join(' > ') === 'Applied > Assessment > Portfolio > Assessment Centre > Offer',
+  `found ${ladder.join(' > ')}`)
+check('every stage on the ladder is a real app_status',
+  ladder.every(stage => appStatuses.includes(stage)))
+check('the three outcomes are off the ladder, not rungs on it',
+  ['Accepted', 'Rejected', 'Withdrawn'].every(outcome =>
+    appStatuses.includes(outcome) && !ladder.includes(outcome)),
+  'accepting, being rejected and withdrawing end an application; they are not further stages')
+check('the retired interview stages are gone from the browser',
+  !/'(Final )?Interview'/.test(utils) && !/'(Final )?Interview'/.test(supabaseTs),
+  'a stage the CHECK constraint rejects would fail on save')
+check('the migration maps the retired stages instead of resetting them',
+  /SET app_status = 'Assessment Centre'/.test(stageMigration)
+  && /WHERE app_status IN \('Interview', 'Final Interview'\)/.test(stageMigration)
+  && stageMigration.indexOf('DROP CONSTRAINT') < stageMigration.indexOf('UPDATE placements'),
+  'resetting them would delete the record that the user applied; the drop must precede the update')
+
 check('the stage date-stamping rule has exactly one implementation',
   (read('src/lib/utils.ts').match(/export function stagePatch/g) ?? []).length === 1
   && ['src/components/PlacementDetail.tsx', 'src/components/ApplicationCard.tsx',
@@ -392,7 +433,6 @@ check('a day-precision opening date survives storage and still opens the role',
 // `Date.parse` for everything that was not ISO, which answers confidently and
 // wrongly here: "Autumn 2026" and "Summer 2026" both came back as 1 January
 // 2026, and "Not published for 2027" came back as 1 January 2027.
-const utils = read('src/lib/utils.ts')
 const browserParseDate = utils.slice(utils.indexOf('export function parseDate'))
   .slice(0, utils.slice(utils.indexOf('export function parseDate')).indexOf('\n}\n') + 3)
 check('the browser anchors seasons to the same months as the SQL',

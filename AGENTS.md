@@ -90,7 +90,10 @@ source of truth.
 
 - `application_status`: `Open Now` · `Opening Soon` · `Expected` · `Not Yet Published` · `Closed` · `Unknown`
 - `opportunity_type`: `Industrial Placement` · `Spring Week / Insight` · `Internship / Co-op` · `Other Student Programme`
-- `app_status`: `Not Applied` · `Saved` · `Applied` · `Assessment` · `Interview` · `Final Interview` · `Offer` · `Accepted` · `Rejected` · `Withdrawn`
+- `app_status`: `Not Applied` · `Saved` · `Applied` · `Assessment` · `Portfolio` · `Assessment Centre` · `Offer` · `Accepted` · `Rejected` · `Withdrawn`
+  — the ladder is `Applied → Assessment → Portfolio → Assessment Centre → Offer`; the last
+  three are outcomes, not rungs. The browser list and this CHECK constraint must stay
+  identical, and `npm run check` fails if they drift.
 - `deadline_type`: `Rolling` · `Fixed` · `Vacancy dependent` · `TBC`
 - `overall_priority`: `APPLY_IMMEDIATELY` · `APPLY_WHEN_OPENING` · `HIGH_PRIORITY_WATCH` · `GOOD_BACKUP` · `LOW_PRIORITY` — **derived, never written**
 
@@ -245,6 +248,11 @@ Rules:
   showing a card for a role that has closed. Availability and priority are not offered as
   filters in the applications view and are cleared on the way in, because a closed role fails
   both and the filter used to survive a view change and empty the tab.
+- **The stage ladder lives in one place.** `STAGE_LADDER`, `STAGE_ENDED`, `STAGE_RANK` and
+  `STAGE_COLORS` in `src/lib/utils.ts` are the whole vocabulary; no component hard-codes a
+  stage name. Changing the ladder means changing those tables, `APP_STATUSES` in
+  `src/lib/supabase.ts` and the CHECK constraint together, in a migration that MAPS any
+  retired value onto its nearest rung — never one that resets it.
 - **`Saved` is not an application.** It is a shortlist marker with its own view. Anything
   that means "has applied" tests `hasApplication()`, never `app_status !== 'Not Applied'`.
 - **One rule for `date_applied` and `cv_version`.** Four surfaces now set a stage; all of

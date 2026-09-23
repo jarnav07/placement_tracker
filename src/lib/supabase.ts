@@ -21,8 +21,8 @@ export type OverallPriority = (typeof PRIORITIES)[number]
 
 /** The user's own progress on an application. Never written by automation. */
 export const APP_STATUSES = [
-  'Not Applied', 'Saved', 'Applied', 'Assessment', 'Interview',
-  'Final Interview', 'Offer', 'Accepted', 'Rejected', 'Withdrawn',
+  'Not Applied', 'Saved', 'Applied', 'Assessment', 'Portfolio',
+  'Assessment Centre', 'Offer', 'Accepted', 'Rejected', 'Withdrawn',
 ] as const
 export type AppStatus = (typeof APP_STATUSES)[number]
 
