@@ -264,7 +264,9 @@ export default function MobilePlacementCard({ placement: p, variant = 'opportuni
                   title={`Stage: ${p.app_status}`}
                 >
                   {ladderStep === -1
-                    ? <b>{STAGE_ENDED.includes(p.app_status) ? '—' : '·'}</b>
+                    /* Off the ladder: a tick for the offer taken, a dash for the
+                       two ways it ended badly. */
+                    ? <b>{p.app_status === 'Accepted' ? '\u2713' : STAGE_ENDED.includes(p.app_status) ? '—' : '·'}</b>
                     : <b>{ladderStep + 1}<small>/{STAGE_LADDER.length}</small></b>}
                 </span>
               )

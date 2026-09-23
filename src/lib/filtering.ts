@@ -119,6 +119,11 @@ export function isSaved(p: Pick<Placement, 'app_status'>): boolean {
   return p.app_status === 'Saved'
 }
 
+/** The vacancy is over: applications are no longer being accepted. */
+export function isClosed(p: Pick<Placement, 'application_status'>): boolean {
+  return p.application_status === 'Closed'
+}
+
 /**
  * `archived` rows are links the crawler mistook for a vacancy. They are hidden
  * from the browsing views — there is deliberately no archive tab — but the rows
@@ -126,9 +131,14 @@ export function isSaved(p: Pick<Placement, 'app_status'>): boolean {
  *
  * `not_interested` is the user's own rejection and keeps its own view.
  *
- * THE ONE THING THAT OVERRIDES BOTH: a role the user has saved or applied to is
- * the user's own record, and nothing the automation later decides about the
- * vacancy may take it out of its tab. A closed vacancy, a row the crawler
+ * `Closed` is the audit saying the vacancy is over. Explore answers "what can I
+ * apply to", so a closed role is noise there and is left out. The row is kept:
+ * it is still exported, still reachable through Saved and My applications, and
+ * comes straight back onto the board if the audit ever re-opens it.
+ *
+ * THE ONE THING THAT OVERRIDES ALL THREE: a role the user has saved or applied
+ * to is the user's own record, and nothing the automation later decides about
+ * the vacancy may take it out of its tab. A closed vacancy, a row the crawler
  * re-classified as archived, even a later "not interested" — the application
  * still happened and is the only trace of it in the app. Availability is shown
  * on the card instead, so a closed role reads as closed rather than vanishing.
@@ -138,9 +148,11 @@ export function placementsForView(placements: Placement[], view: View): Placemen
     case 'applications': return placements.filter(hasApplication)
     case 'saved': return placements.filter(isSaved)
     case 'not-interested': return placements.filter(p => !p.archived && p.not_interested)
-    // Saved and applied roles stay on the board too — that is where the Save
-    // button lives, so removing them would leave no way to undo a save.
-    default: return placements.filter(p => !p.archived && !p.not_interested)
+    // Saved roles stay on the board while they are still open — that is where
+    // the Save button lives, so removing them would leave no way to undo a save.
+    // A closed one drops off Explore and keeps its own tab, where the Save
+    // button is on the same card.
+    default: return placements.filter(p => !p.archived && !p.not_interested && !isClosed(p))
   }
 }
 

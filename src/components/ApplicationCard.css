@@ -65,6 +65,10 @@
 .appcard.is-ended { opacity: 0.78; }
 .appcard.is-ended:hover { opacity: 1; }
 
+/* An accepted offer is finished, but it is not history — it is the outcome the
+   whole board exists for, so it keeps full weight. */
+.appcard.is-ended.appcard--accepted { opacity: 1; }
+
 /* --- Facts ---------------------------------------------------------------- */
 
 .appcard-facts .is-urgent dd,

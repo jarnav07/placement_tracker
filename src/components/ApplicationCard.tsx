@@ -3,7 +3,7 @@ import type { AppStatus, Placement, PlacementPatch } from '../lib/supabase'
 import { APPLICATION_STAGES } from '../lib/supabase'
 import {
   STAGE_COLORS, STAGE_ENDED, STAGE_LADDER, STATUS_COLORS,
-  formatDate, isBlank, relativeDays, slug, stagePatch,
+  formatDate, isBlank, relativeDays, slug, stageLabel, stagePatch,
 } from '../lib/utils'
 import { daysUntil } from '../lib/filtering'
 import { Pill } from './ui'
@@ -65,10 +65,12 @@ export default function ApplicationCard({ placement: p, isSelected, onOpen, onPa
         <span className="appcard-stage">{stage}</span>
       </header>
 
-      {/* Where the application is on the ladder. Rejected and Withdrawn do not
-          get a position — they are how it stopped, not how far it got. */}
+      {/* Where the application is on the ladder. The three outcomes do not get a
+          position — they are how it stopped, not how far it got. */}
       {ended
-        ? <p className="appcard-ended">This application ended at <b>{stage.toLowerCase()}</b>.</p>
+        ? stage === 'Accepted'
+          ? <p className="appcard-ended">Offer <b>accepted</b>. This one is done.</p>
+          : <p className="appcard-ended">This application ended at <b>{stage.toLowerCase()}</b>.</p>
         : (
           <ol className="appcard-ladder" aria-label={`Stage ${reached + 1} of ${STAGE_LADDER.length}: ${stage}`}>
             {STAGE_LADDER.map((step, index) => (
@@ -78,7 +80,7 @@ export default function ApplicationCard({ placement: p, isSelected, onOpen, onPa
                 title={step}
               >
                 <i aria-hidden="true" />
-                <span>{step === 'Final Interview' ? 'Final' : step}</span>
+                <span>{stageLabel(step)}</span>
               </li>
             ))}
           </ol>

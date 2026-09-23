@@ -46,8 +46,8 @@ export const STAGE_COLORS: Record<AppStatus, string> = {
   'Saved': '#a78bfa',
   'Applied': '#38bdf8',
   'Assessment': '#22d3ee',
-  'Interview': '#818cf8',
-  'Final Interview': '#c084fc',
+  'Portfolio': '#818cf8',
+  'Assessment Centre': '#c084fc',
   'Offer': '#fbbf24',
   'Accepted': '#22c55e',
   'Rejected': '#ef4444',
@@ -55,15 +55,15 @@ export const STAGE_COLORS: Record<AppStatus, string> = {
 }
 
 /**
- * Sort order for the applications view: furthest through the process first, and
- * the two ways an application ends — rejected, withdrawn — last whatever stage
- * they were reached from.
+ * Sort order for the applications view: furthest through the process first, an
+ * accepted offer above everything, and the two ways an application ends badly
+ * — rejected, withdrawn — last whatever stage they were reached from.
  */
 export const STAGE_RANK: Record<AppStatus, number> = {
   'Accepted': 0,
   'Offer': 1,
-  'Final Interview': 2,
-  'Interview': 3,
+  'Assessment Centre': 2,
+  'Portfolio': 3,
   'Assessment': 4,
   'Applied': 5,
   'Saved': 6,
@@ -72,16 +72,30 @@ export const STAGE_RANK: Record<AppStatus, number> = {
   'Rejected': 9,
 }
 
-/** The ladder an application climbs, in order. Rejected and Withdrawn end it instead. */
+/**
+ * The five stages an application climbs, in order. It ends at the offer —
+ * accepting, being rejected and withdrawing are outcomes, not further rungs,
+ * and are listed in `STAGE_ENDED` instead.
+ */
 export const STAGE_LADDER: AppStatus[] = [
-  'Applied', 'Assessment', 'Interview', 'Final Interview', 'Offer', 'Accepted',
+  'Applied', 'Assessment', 'Portfolio', 'Assessment Centre', 'Offer',
 ]
 
-export const STAGE_ENDED: AppStatus[] = ['Rejected', 'Withdrawn']
+/** Every stage that is off the ladder because the application stopped there. */
+export const STAGE_ENDED: AppStatus[] = ['Accepted', 'Rejected', 'Withdrawn']
+
+/** Short labels, so five rungs still fit across a phone-width card. */
+export const STAGE_SHORT_LABELS: Partial<Record<AppStatus, string>> = {
+  'Assessment Centre': 'Centre',
+}
+
+export function stageLabel(stage: AppStatus): string {
+  return STAGE_SHORT_LABELS[stage] ?? stage
+}
 
 /**
- * How far along the ladder a stage sits, as a step count. A rejected or
- * withdrawn application keeps no step — it did not reach the end, it stopped.
+ * How far along the ladder a stage sits, as a step count. An application that
+ * ended keeps no step — accepted, rejected or withdrawn, it stopped climbing.
  */
 export function stageStep(stage: AppStatus): number | null {
   const index = STAGE_LADDER.indexOf(stage)
