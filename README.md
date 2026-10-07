@@ -361,8 +361,9 @@ Apply `supabase/migrations/` in order. The current schema is defined by:
 
 ## Scheduled maintenance
 
-`.github/workflows/placement-maintenance.yml` runs the **full pass at 16:00 Europe/London**
-every day, and the cheap **scheduled-openings pass at 07:00 and 12:00** — so a placement whose
+`.github/workflows/placement-maintenance.yml` runs the **verification pass at 16:00 Europe/London**
+every day (currently deterministic only — `VERIFY_PROVIDERS=deterministic`, no AI provider —
+and with discovery of new roles paused), and the cheap **scheduled-openings pass at 07:00 and 12:00** — so a placement whose
 employer published today as its opening day is flipped before the working day starts rather
 than in the evening.
 
@@ -373,7 +374,7 @@ proceeds, and takes inputs:
 
 | Input | Purpose |
 | --- | --- |
-| `steps` | `discover-and-verify` (default), `verify-only`, `discover-only`, `openings-only` |
+| `steps` | `verify-only` (default), `openings-only`, `providers-only` |
 | `limit` | Verify at most N roles, least recently verified first |
 | `only_stale_days` | Only verify roles not checked in the last N days |
 | `include_not_interested` | Also verify rejected roles |
