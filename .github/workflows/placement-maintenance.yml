@@ -13,7 +13,8 @@ on:
     # 12:00 London — scheduled openings again, for campaigns that go live at noon.
     - cron: '0 11 * * *'
     - cron: '0 12 * * *'
-    # 16:00 London — the full pass: discovery, verification, then openings.
+    # 16:00 London — the full pass: deterministic verification of tracked roles,
+    # then openings. Discovery of new roles is paused.
     - cron: '0 15 * * *'
     - cron: '0 16 * * *'
   workflow_dispatch:
@@ -21,8 +22,8 @@ on:
       steps:
         description: Which steps to run
         type: choice
-        default: discover-and-verify
-        options: [discover-and-verify, verify-only, discover-only, openings-only, providers-only]
+        default: verify-only
+        options: [verify-only, openings-only, providers-only]
       limit:
         description: 'Verify at most N roles (0 = all). Highest-value roles first.'
         type: string
@@ -58,14 +59,15 @@ jobs:
       - id: decide
         run: |
           if [ "${{ github.event_name }}" != "schedule" ]; then
-            echo "mode=${{ inputs.steps || 'discover-and-verify' }}" >> "$GITHUB_OUTPUT"
-            echo "Manual run — proceeding with '${{ inputs.steps || 'discover-and-verify' }}'."
+            echo "mode=${{ inputs.steps || 'verify-only' }}" >> "$GITHUB_OUTPUT"
+            echo "Manual run — proceeding with '${{ inputs.steps || 'verify-only' }}'."
             exit 0
           fi
 
           UK_HOUR="$(TZ=Europe/London date +%H)"
           case "$UK_HOUR" in
-            16) MODE=discover-and-verify ;;
+            # Discovery is paused: the daily pass only re-checks roles already tracked.
+            16) MODE=verify-only ;;
             07|12) MODE=openings-only ;;
             *) MODE=none ;;
           esac
@@ -149,29 +151,17 @@ jobs:
 
   maintain:
     needs: gate
-    if: contains(fromJSON('["discover-and-verify", "verify-only", "discover-only"]'), needs.gate.outputs.mode)
+    if: needs.gate.outputs.mode == 'verify-only'
     runs-on: ubuntu-latest
     timeout-minutes: 350
 
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL || secrets.VITE_SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      # PRIMARY verification provider. Set ONE of these two keys:
-      #   VERTEX_API_KEY  — Vertex AI in express mode (aiplatform.googleapis.com)
-      #   GEMINI_API_KEY  — the Gemini Developer API / AI Studio
-      # Same models either way; only the endpoint and the key differ. If both are
-      # present, Vertex wins unless GEMINI_BACKEND says otherwise.
-      VERTEX_API_KEY: ${{ secrets.VERTEX_API_KEY }}
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      GEMINI_BACKEND: ${{ vars.GEMINI_BACKEND }}
-      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
-      # SECONDARY verification provider, consulted on contested or consequential
-      # decisions. Keeping it is deliberate: two independent providers must agree
-      # before a role is marked Closed.
-      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
-      AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
-      AZURE_OPENAI_DEPLOYMENT_NAME: ${{ secrets.AZURE_OPENAI_DEPLOYMENT_NAME }}
-      MODE: ${{ needs.gate.outputs.mode }}
+      # Verification is deterministic for now: the tracked pages and the employer's
+      # applicant tracking system only. Vertex AI / Gemini and Azure are not called,
+      # so no AI key is needed. Remove this line to bring the providers back.
+      VERIFY_PROVIDERS: deterministic
 
     steps:
       - uses: actions/checkout@v4
@@ -194,44 +184,14 @@ jobs:
             exit 1
           fi
 
-          # The primary verifier needs exactly one Gemini key, either backend.
-          if [ -z "$VERTEX_API_KEY" ] && [ -z "$GEMINI_API_KEY" ]; then
-            echo "::error::No primary verifier key. Add VERTEX_API_KEY (Vertex AI express mode) or GEMINI_API_KEY (AI Studio)"
-            echo "::error::under Settings → Secrets and variables → Actions."
-            exit 1
-          fi
+      # Discovery of new roles (npm run discover) is paused: only roles already in
+      # the tracker are re-checked.
 
-          # Azure is the second opinion. Without it a role can still be opened,
-          # but closing one loses its independent corroboration, so say so loudly
-          # rather than degrading quietly.
-          for name in AZURE_OPENAI_API_KEY AZURE_OPENAI_ENDPOINT AZURE_OPENAI_DEPLOYMENT_NAME; do
-            if [ -z "${!name}" ]; then
-              echo "::warning::$name is not set — running without the Azure second opinion."
-            fi
-          done
-
-      # Proves the key actually works before spending a few hundred calls finding
-      # out that it does not. Costs a few hundred tokens.
-      - name: Check the verification providers
-        if: env.MODE != 'discover-only'
-        run: npm run check:providers
-
-      # Deterministic crawl of career pages already tracked. Only links whose own
-      # label and URL read as a student vacancy become candidates, and each one is
-      # verified before it is inserted.
-      - name: Discover new 2027 placements
-        if: env.MODE != 'verify-only'
-        env:
-          USE_GEMINI: 'true'
-          USE_AZURE: 'true'
-        run: npm run discover
-
-      # Gemini (primary) and Azure (secondary) re-research each tracked role over
-      # the tracker's own deterministic evidence, and write back the researched
-      # columns. Identity, derived ranking and user-owned tracking columns are
-      # never written.
+      # Re-checks each tracked role against the deterministic evidence alone. A
+      # status changes only when the board or the tracked page is decisive; every
+      # other row keeps what it has. Identity, derived ranking and user-owned
+      # tracking columns are never written.
       - name: Verify every tracked placement
-        if: env.MODE != 'discover-only'
         env:
           AUDIT_LIMIT: ${{ inputs.limit || '0' }}
           AUDIT_ONLY_STALE_DAYS: ${{ inputs.only_stale_days || '0' }}
@@ -241,5 +201,4 @@ jobs:
       # Last word of the day: any placement whose published opening date has now
       # arrived is open, whether or not verification could reach the employer.
       - name: Apply published opening dates
-        if: env.MODE != 'discover-only'
         run: npm run openings

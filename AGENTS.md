@@ -185,7 +185,7 @@ Do not remove the source-page, candidate, concurrency or delay limits without a 
 
 | Workflow | Trigger | Does |
 | --- | --- | --- |
-| `.github/workflows/placement-maintenance.yml` | 16:00 Europe/London daily, plus manual | Discovery, verification, then scheduled openings |
+| `.github/workflows/placement-maintenance.yml` | 16:00 Europe/London daily, plus manual | Deterministic verification of tracked roles, then scheduled openings |
 | `.github/workflows/placement-maintenance.yml` | 07:00 and 12:00 Europe/London | Scheduled openings only (no AI provider, no crawl) |
 | `.github/workflows/deploy-pages.yml` | push to `main`, manual | Build and publish to GitHub Pages |
 | `.github/workflows/ci.yml` | push, pull request | `npm run check` and `npm run build` |
@@ -194,6 +194,13 @@ Each London time fires at both its GMT and its BST hour, and the `gate` job keep
 the real London time and decides which mode to run. **The gate applies to `schedule` only** —
 a manual run always proceeds. (An earlier version gated manual runs too, so
 `workflow_dispatch` silently did nothing unless it happened to be started at exactly 4 PM UK.)
+
+**Current mode:** discovery is paused and the workflow sets `VERIFY_PROVIDERS=deterministic`,
+so verification runs stage 1 only — no Vertex AI/Gemini or Azure calls. A status changes only
+where the ATS or the tracked page is decisive; every other row keeps its stored status (the
+"clear to `Unknown`" rule is skipped, because stage 1 alone cannot reproduce a provider's
+finding). To restore AI verification, remove that variable and the provider secrets from the
+`maintain` job.
 
 Do not casually change the schedule, concurrency (`cancel-in-progress: false` is deliberate)
 or timeout.

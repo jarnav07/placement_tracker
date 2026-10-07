@@ -9,6 +9,8 @@
 //   4. `decideStatus` combines the three, with the deterministic check able to
 //      carry a decision on its own because it cannot hallucinate.
 //
+// VERIFY_PROVIDERS=deterministic skips stages 2 and 3 entirely.
+//
 // OWNERSHIP RULES — the difference between an audit and a data-loss event:
 //
 //   IDENTITY      company, specific_role      never overwritten. They are what
@@ -38,9 +40,19 @@ import { openingIsDue, daysUntil, todayIso } from './verify/dates.mjs'
 
 const env = name => (process.env[name] || '').trim().replace(/^['"]|['"]$/g, '')
 
-if (!geminiConfigured && !azureConfigured) {
+/**
+ * VERIFY_PROVIDERS=deterministic runs stage 1 alone: no Gemini, no Azure, no keys
+ * needed. Only the applicant tracking system and the tracked pages can change a
+ * status, and only where they are decisive on their own.
+ */
+const DETERMINISTIC_ONLY = env('VERIFY_PROVIDERS') === 'deterministic'
+const USE_PRIMARY = !DETERMINISTIC_ONLY && geminiConfigured
+const USE_AZURE = !DETERMINISTIC_ONLY && azureConfigured
+
+if (!DETERMINISTIC_ONLY && !geminiConfigured && !azureConfigured) {
   throw new Error('No verification provider configured. Set VERTEX_API_KEY (Vertex AI) or GEMINI_API_KEY (AI Studio)'
-    + ' for the primary verifier, and/or the AZURE_OPENAI_* secrets for the secondary.')
+    + ' for the primary verifier, and/or the AZURE_OPENAI_* secrets for the secondary,'
+    + ' or set VERIFY_PROVIDERS=deterministic to run without either.')
 }
 
 const supabase = connect()
@@ -53,7 +65,7 @@ const LIMIT = Number(env('AUDIT_LIMIT') || 0)
 const ONLY_STALE_DAYS = Number(env('AUDIT_ONLY_STALE_DAYS') || 0)
 const INCLUDE_NOT_INTERESTED = env('AUDIT_INCLUDE_NOT_INTERESTED') === 'true'
 const DRY_RUN = env('AUDIT_DRY_RUN') === 'true'
-const USE_SECONDARY = env('USE_AZURE_SECONDARY') !== 'false'
+const USE_SECONDARY = USE_AZURE && env('USE_AZURE_SECONDARY') !== 'false'
 
 // ---------------------------------------------------------------------------
 // Row selection
@@ -100,7 +112,16 @@ async function verifyRole(role) {
   const evidence = await gatherEvidence(role)
   const verdict = deterministicVerdict(role, evidence)
 
-  const primary = geminiConfigured
+  if (DETERMINISTIC_ONLY) {
+    const decision = decideStatus({ role, record: null, verdict, primary: null, secondary: null, today: TODAY })
+    return {
+      evidence, verdict, record: null, decision, secondary: null,
+      primary: { ok: false, provider: 'Gemini', error: 'disabled' },
+      secondOpinion: { needed: false, why: '' },
+    }
+  }
+
+  const primary = USE_PRIMARY
     ? await verifyWithGemini(role, evidence, verdict)
     : { ok: false, provider: 'Gemini', error: 'no Gemini key configured' }
 
@@ -126,7 +147,7 @@ async function verifyRole(role) {
   })
 
   let secondary = null
-  if (USE_SECONDARY && azureConfigured && second.needed) {
+  if (USE_SECONDARY && second.needed) {
     console.log(`  second opinion (Azure): ${second.why}`)
     const result = await verifyWithAzure(role, evidence, verdict)
     if (result.ok) secondary = result
@@ -160,7 +181,7 @@ async function verifyRole(role) {
 
 function evidenceTrail(role, outcome, finalStatus) {
   const { verdict, primary, secondary, decision, secondOpinion } = outcome
-  const providers = [
+  const providers = DETERMINISTIC_ONLY ? ['none — deterministic-only run'] : [
     primary.ok ? `Gemini ${primary.model}` : `Gemini unavailable (${primary.error})`,
     secondary
       ? `Azure ${secondary.model}`
@@ -219,7 +240,10 @@ function buildUpdate(role, outcome) {
   // The status is the decision's alone — never a raw provider answer.
   if (decision.status) {
     update.application_status = decision.status
-  } else if (['Open Now', 'Closed'].includes(role.application_status)) {
+  } else if (!DETERMINISTIC_ONLY && ['Open Now', 'Closed'].includes(role.application_status)) {
+    // Skipped in a deterministic-only run: most stored statuses were established
+    // by a provider from evidence this stage never looks at (search results,
+    // programme pages), so failing to reproduce them here says nothing.
     // Nothing was established today, and a time-sensitive claim is standing.
     // "Open Now" is what makes the user drop everything and apply, so it may not
     // stand on evidence we can no longer reproduce. A live board listing is
@@ -273,9 +297,10 @@ async function recordFailure(role, message) {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  console.log(describeBackend())
-  if (geminiConfigured) await resolveModel()
-  else console.warn('No Gemini key configured — running on the Azure secondary alone. Accuracy will be lower.')
+  if (DETERMINISTIC_ONLY) console.log('Deterministic-only run: Gemini and Azure are not called.')
+  else console.log(describeBackend())
+  if (USE_PRIMARY) await resolveModel()
+  else if (!DETERMINISTIC_ONLY) console.warn('No Gemini key configured — running on the Azure secondary alone. Accuracy will be lower.')
 
   const roles = await loadRoles()
   const total = roles.length
@@ -286,8 +311,8 @@ async function main() {
     ONLY_STALE_DAYS > 0 ? `, stale > ${ONLY_STALE_DAYS}d` : '',
     LIMIT > 0 ? `, limit ${LIMIT}` : '',
     DRY_RUN ? ', DRY RUN' : '',
-    `). Primary: ${geminiConfigured ? 'Gemini' : 'none'}.`,
-    ` Secondary: ${USE_SECONDARY && azureConfigured ? 'Azure (on demand)' : 'disabled'}.`,
+    `). Primary: ${USE_PRIMARY ? 'Gemini' : 'none'}.`,
+    ` Secondary: ${USE_SECONDARY ? 'Azure (on demand)' : 'disabled'}.`,
     ` Concurrency ${MAX_CONCURRENT}.`,
   ].join(''))
 
